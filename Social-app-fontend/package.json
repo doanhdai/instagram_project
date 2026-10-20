@@ -1,7 +1,6 @@
 {
   "name": "social-app",
   "version": "0.1.0",
-  "packageManager": "pnpm@9.15.9",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.0",
@@ -39,6 +38,8 @@
     "react-toastify": "^11.0.5",
     "redux-persist": "^6.0.0",
     "simple-peer": "^9.11.1",
+    "social-app": "file:",
+    "socket.io-client": "^4.8.1",
     "sockjs-client": "^1.6.1",
     "tapable": "^2.2.1",
     "web-vitals": "^2.1.4",
@@ -52,7 +53,8 @@
   },
   "eslintConfig": {
     "extends": [
-      "react-app"
+      "react-app",
+      "react-app/jest"
     ]
   },
   "browserslist": {

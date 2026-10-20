@@ -7,8 +7,12 @@ import { FaInstagram } from "react-icons/fa";
 import { userLogin } from "../../Service/AuthApi";
 import { toast, ToastContainer } from "react-toastify";
 
+import { signInWithPopup, FacebookAuthProvider } from "firebase/auth";
+import { auth } from "../firebase/config";
 import { useDispatch } from "react-redux";
 import { userLoginData } from "../../Redux/Reducer/UserAppDeucer";
+import websocket, { useWebSocket } from "../../Utils/configCallVideo/websocket";
+const provider = new FacebookAuthProvider();
 const Login = () => {
   const dispatch = useDispatch();
 
@@ -21,6 +25,7 @@ const Login = () => {
     password: yup
       .string()
       .min(8, "Tối thiểu 8 ký tự")
+      .max(12, "Tối đa 12 ký tự")
       .required("Mật khẩu là bắt buộc"),
   });
 
@@ -58,6 +63,32 @@ const Login = () => {
       } else {
         toast.error("Lỗi kết nối, vui lòng thử lại sau.");
       }
+    }
+  };
+
+  const handleLoginFb = async () => {
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+      if (user) {
+        dispatch(
+          userLoginData({
+            user: {
+              name: user.displayName,
+              email: user.email,
+              avatar: user.photoURL,
+            },
+            accessToken: user.accessToken,
+          })
+        );
+
+        toast.success("Đăng nhập thành công");
+        setTimeout(() => {
+          usenavi("/home");
+        }, 3000);
+      }
+    } catch (error) {
+      console.error("Lỗi khi đăng nhập:", error.message);
     }
   };
 
@@ -107,6 +138,18 @@ const Login = () => {
               Đăng nhập
             </button>
           </form>
+          <div className="relative flex items-center my-4">
+            <hr className="w-full border-gray-300" />
+            <span className="absolute inset-x-0 text-gray-400 bg-white px-2 text-sm mx-auto text-center">
+              ----- HOẶC -----
+            </span>
+          </div>
+          <button
+            className="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition"
+            onClick={() => handleLoginFb()}
+          >
+            Đăng nhập bằng Facebook
+          </button>
           <a
             href="#"
             className="text-blue-600 text-sm block mt-3 hover:underline"

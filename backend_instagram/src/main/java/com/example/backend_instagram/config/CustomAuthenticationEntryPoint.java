@@ -17,8 +17,8 @@ public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint 
     private final AuthenticationEntryPoint delegate = new BearerTokenAuthenticationEntryPoint();
     private final ObjectMapper mapper; // Chuyển data thành JSON
 
-    public CustomAuthenticationEntryPoint() {
-        this.mapper = new ObjectMapper();
+    public CustomAuthenticationEntryPoint(ObjectMapper mapper) {
+        this.mapper = mapper;
     }
 
     @Override

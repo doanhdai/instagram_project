@@ -1,9 +1,10 @@
 package com.example.backend_instagram;
 
-import com.example.backend_instagram.config.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
 
-class BackendInstagramApplicationTests extends TestcontainersConfiguration {
+@SpringBootTest
+class BackendInstagramApplicationTests {
 
 	@Test
 	void contextLoads() {

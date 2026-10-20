@@ -1,5 +1,6 @@
 package com.example.backend_instagram.config;
 
+import com.example.backend_instagram.*;
 import com.example.backend_instagram.utils.SecurityUntil;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.nimbusds.jose.util.Base64;
@@ -19,6 +20,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -46,7 +48,8 @@ public class SecurityConfiguration {
     public AuthenticationManager authenticationManager(
             UserDetailsService userDetailsService,
             PasswordEncoder passwordEncoder) {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder);
         return new ProviderManager(provider);
     }
@@ -62,12 +65,9 @@ public class SecurityConfiguration {
         authz
           .requestMatchers("/test", "/api/v1/auth/login" ,"/api/v1/user","/api/v1/auth/register")
           .permitAll() // 🔹 Cho phép truy cập không cần xác thực
-          .requestMatchers("/actuator/health/**")
-          .permitAll()
           // .anyRequest().authenticated()
           .requestMatchers("/api/v1/messages/**").authenticated()
-          .requestMatchers("/ws/**", "/ws-native/**").permitAll()
-          // STOMP CONNECT được xác thực bằng StompAuthChannelInterceptor.
+          .requestMatchers("/ws/**").permitAll() // Thêm dòng này
           .anyRequest()
           .authenticated() // 🔹 Các request khác phải đăng nhập
       )
