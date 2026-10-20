@@ -7,12 +7,9 @@ import com.example.backend_instagram.repository.UserRepository;
 import com.example.backend_instagram.repository.PostRepository;
 import com.example.backend_instagram.dto.user.UserStatsDTO;
 import com.example.backend_instagram.service.FollowService;
-import com.example.backend_instagram.utils.constant.CacheNames;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -29,7 +26,6 @@ public class UserService {
     this.followService = followService;
   }
 
-  @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
   public User createUser(User user) {
     return this.userRepository.save(user);
   }
@@ -50,7 +46,6 @@ public class UserService {
     return this.userRepository.existsByUserNickname(nikname);
   }
 
-  @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
   public void updateUserToken(String refreshToken, String username) {
     User user = handleGetUserByUserNawm(username);
     if (user != null) {
@@ -59,7 +54,6 @@ public class UserService {
     }
   }
 
-  @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
   public void updateUser(User user) {
     userRepository.save(user);
   }
@@ -72,7 +66,6 @@ public class UserService {
     return null;
   }
 
-  @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
   public User handleUpdateUser(User user) {
     User userUPdate = this.fetchUserById(user.getId());
 
@@ -116,7 +109,6 @@ public class UserService {
     return this.userRepository.findByRefreshTokenAndUserEmail(token, email);
   }
 
-  @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
   public boolean deleteUser(String userId) {
     try {
       this.userRepository.deleteById(Long.parseLong(userId));
@@ -126,14 +118,13 @@ public class UserService {
     }
   }
 
-  @Cacheable(cacheNames = CacheNames.USER_STATS, key = "#userId")
   public UserStatsDTO getUserStats(Long userId) {
     User user = fetchUserById(userId);
     Long followersCount = followService.countFollowersOfUser(userId);
     Long followingCount = followService.countFollowingOfUser(userId);
     Long postsCount = postRepository.countByUserId(userId);
     
-    return UserStatsDTO.from(user, followersCount, followingCount, postsCount);
+    return new UserStatsDTO(user, followersCount, followingCount, postsCount);
   }
 
   public User getUserById (Long userId) {

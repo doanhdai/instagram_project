@@ -1,7 +1,6 @@
 package com.example.backend_instagram.controller;
 
 import com.example.backend_instagram.dto.post.CreatePostRequest;
-import com.example.backend_instagram.dto.post.PostResponseDTO;
 import com.example.backend_instagram.entity.Post;
 import com.example.backend_instagram.service.CommentService;
 import com.example.backend_instagram.service.LikeService;
@@ -44,14 +43,14 @@ public class PostController {
     }
 
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<PostResponseDTO>> getAllPostsByUserId(@PathVariable Long userId) {
-        List<PostResponseDTO> posts = postService.getAllPostsByUserId(userId);
+    public ResponseEntity<List<Post>> getAllPostsByUserId(@PathVariable Long userId) {
+        List<Post> posts = postService.getAllPostsByUserId(userId);
         return ResponseEntity.ok(posts);
     }
 
     @GetMapping
-    public ResponseEntity<List<PostResponseDTO>> getAllPosts() {
-        List<PostResponseDTO> posts = postService.getAllPosts();
+    public ResponseEntity<List<Post>> getAllPosts() {
+        List<Post> posts = postService.getAllPosts();
         return ResponseEntity.ok(posts);
     }
 
@@ -120,8 +119,8 @@ public class PostController {
     }
 
     @GetMapping("/following/{userId}")
-    public ResponseEntity<List<PostResponseDTO>> getPostsFromFollowing(@PathVariable Long userId) {
-        List<PostResponseDTO> posts = postService.getPostsFromFollowing(userId);
+    public ResponseEntity<List<Post>> getPostsFromFollowing(@PathVariable Long userId) {
+        List<Post> posts = postService.getPostsFromFollowing(userId);
         return ResponseEntity.ok(posts);
     }
 

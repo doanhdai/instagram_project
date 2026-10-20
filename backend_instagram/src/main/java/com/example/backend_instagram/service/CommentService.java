@@ -6,15 +6,11 @@ import com.example.backend_instagram.entity.Post;
 import com.example.backend_instagram.entity.User;
 import com.example.backend_instagram.repository.CommentRepository;
 import com.example.backend_instagram.repository.PostRepository;
-import com.example.backend_instagram.utils.constant.CacheNames;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -46,10 +42,6 @@ public class CommentService {
         this.objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 
-    @Caching(evict = {
-            @CacheEvict(cacheNames = CacheNames.COMMENTS, key = "#postId"),
-            @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true)
-    })
     public void addComment(Long postId, Long userId, String content) {
         Post post = postRepository.findById(postId)
                 .orElseThrow(() -> new IllegalArgumentException("Bài viết không tồn tại"));
@@ -80,7 +72,6 @@ public class CommentService {
         }
     }
 
-    @Cacheable(cacheNames = CacheNames.COMMENTS, key = "#postId")
     public List<CommentDTO> getCommentsByPostId(Long postId) {
         Post post = postRepository.findById(postId)
                 .orElseThrow(() -> new IllegalArgumentException("Bài viết không tồn tại"));
