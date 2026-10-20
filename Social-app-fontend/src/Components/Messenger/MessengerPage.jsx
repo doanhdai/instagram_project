@@ -194,6 +194,7 @@ const MessengerPage = () => {
   const [forceUpdate, setForceUpdate] = useState(0);
 
   const currentUser = useSelector((state) => state.login?.userInfo);
+  const accessToken = useSelector((state) => state.login?.accessToken);
   console.log(currentUser);
   const {
     conversations,
@@ -213,7 +214,6 @@ const MessengerPage = () => {
     remoteStream,
     caller,
     name,
-    socketRef,
     selectedCameraId,
     setSelectedCameraId,
     availableCameras,
@@ -248,7 +248,7 @@ const MessengerPage = () => {
       localStorage.setItem("userId", currentUser.id);
 
       // Sau khi đã lưu userId, mới khởi tạo WebSocket
-      webSocketService.init(dispatch);
+      webSocketService.init(dispatch, currentUser.id, accessToken);
 
       // KHÔNG gọi connect() ở đây, để đến khi cần thiết mới kết nối
 
@@ -258,10 +258,10 @@ const MessengerPage = () => {
 
     return () => {
       dispatch(resetChatState());
-      // Đảm bảo disconnect WebSocket khi component unmount
-      webSocketService.disconnect();
+      // Không disconnect ở đây: WebSocketService là singleton dùng chung cho
+      // notification/video call. Logout sẽ gọi disconnect().
     };
-  }, [currentUser?.id, dispatch]);
+  }, [currentUser?.id, accessToken, dispatch]);
 
   // Thêm useEffect mới để xử lý kết nối WebSocket khi cần thiết
   useEffect(() => {
@@ -316,8 +316,6 @@ const MessengerPage = () => {
                 size: 20,
               })
             );
-
-            webSocketService.subscribeToConversation(conversationIdInt);
           } else {
             console.error(
               "You don't have permission to access this conversation"
@@ -401,24 +399,13 @@ const MessengerPage = () => {
             }
           }
 
-          // Đơn giản hóa - sử dụng trực tiếp để tránh gọi ensureConnected
           try {
-            // Subscribe vào cuộc trò chuyện bằng cách gọi _doSubscribeToConversation trực tiếp
-            if (webSocketService.stompClient && webSocketService.connected) {
-              webSocketService._doSubscribeToConversation(
-                currentConversation.id
-              );
-            }
-
-            // Chỉ mark as read nếu còn unread và đã connected
+            // User queue đã nhận mọi tin nhắn; không cần subscribe theo conversation.
             if (currentConversation.unreadCount > 0 && webSocketConnected) {
-              await webSocketService.markAsRead(
-                currentConversation.id,
-                currentUser.id
-              );
+              await webSocketService.markAsRead(currentConversation.id);
             }
           } catch (error) {
-            console.error("Error in subscription:", error);
+            console.error("Error marking conversation as read:", error);
           }
         } catch (error) {
           if (retries > 0) {
@@ -581,14 +568,6 @@ const MessengerPage = () => {
           })
         );
 
-        // THÊM: Đảm bảo subscription
-        if (webSocketService.stompClient && webSocketService.connected) {
-          try {
-            webSocketService._doSubscribeToConversation(conversation.id);
-          } catch (err) {
-            console.error("Error subscribing to conversation:", err);
-          }
-        }
       }
 
       if (
@@ -597,7 +576,7 @@ const MessengerPage = () => {
         webSocketConnected
       ) {
         webSocketService
-          .markAsRead(conversation.id, currentUser.id)
+          .markAsRead(conversation.id)
           .catch((err) => {
             console.error("Error marking messages as read:", err);
             dispatch(
@@ -882,23 +861,6 @@ const MessengerPage = () => {
       );
     }
   };
-
-  // Thêm effect để xử lý khi cuộc gọi bị kết thúc từ phía bên kia
-  useEffect(() => {
-    const socket = socketRef.current;
-    if (socket) {
-      const handleCallEnded = () => {
-        // Tự động kết thúc cuộc gọi khi bên kia kết thúc
-        leaveCall();
-      };
-
-      socket.on("callEnded", handleCallEnded);
-
-      return () => {
-        socket.off("callEnded", handleCallEnded);
-      };
-    }
-  }, [socketRef, leaveCall]);
 
   // Thêm useEffect để lấy danh sách bạn bè khi tìm kiếm
   useEffect(() => {

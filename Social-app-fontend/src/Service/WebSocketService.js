@@ -1,140 +1,101 @@
+import { Client } from "@stomp/stompjs";
 import SockJS from "sockjs-client";
-import { Stomp } from "@stomp/stompjs";
 import {
   addMessage,
   markMessagesAsRead,
+  markMessagesAsReadByOther,
   setWebSocketConnected,
-  updateConversationWithLatestMessage,
 } from "../Redux/Reducer/chatSlice";
 
+/**
+ * Một STOMP client duy nhất cho toàn app.
+ *
+ * Server chỉ gửi dữ liệu qua user destination (/user/queue/**). Nhờ đó client
+ * không cần subscribe theo từng conversation và không thể nghe dữ liệu của
+ * user khác.
+ */
 class WebSocketService {
   constructor() {
-    this.stompClient = null;
+    this.client = null;
     this.connected = false;
-    this.connecting = false;
-    this.subscriptions = [];
-    this.reconnectTimeout = null;
-    this.apiUrl = process.env.REACT_APP_API_URL || "http://localhost:8081";
-    this.connectionCheckInterval = null;
-    this.retryCount = 0;
-    this.maxRetries = 5;
-
-    // Thêm event listeners để xử lý khi browser thay đổi trạng thái
-    if (typeof window !== "undefined") {
-      // Khi tab trở nên active
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") {
-          console.log("Tab became visible, checking WebSocket connection...");
-          if (!this.isReallyConnected()) {
-            console.log(
-              "WebSocket disconnected while inactive, reconnecting..."
-            );
-            this.reconnect();
-          }
-        }
-      });
-
-      // Khi kết nối mạng thay đổi
-      window.addEventListener("online", () => {
-        console.log("Network connection restored, reconnecting WebSocket...");
-        this.reconnect();
-      });
-    }
+    this.connectingPromise = null;
+    this.subscriptions = new Map();
+    this.listeners = new Map();
+    this.markReadTimers = new Map();
+    this.dispatch = null;
+    this.userId = null;
+    this.accessToken = null;
+    this.apiUrl = (
+      process.env.REACT_APP_API_URL || "http://localhost:8081"
+    ).replace(/\/+$/, "");
   }
 
-  isReallyConnected() {
-    return this.stompClient && this.connected && this.stompClient.connected;
-  }
-
-  startConnectionMonitoring() {
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
+  init(dispatch, userId, accessToken) {
+    const userChanged = this.userId && userId && this.userId !== userId;
+    const tokenChanged =
+      this.accessToken && accessToken && this.accessToken !== accessToken;
+    if (userChanged || tokenChanged) {
+      // Đổi user/token (logout/login) thì đóng kết nối cũ.
+      this.disconnect();
     }
-
-    this.connectionCheckInterval = setInterval(() => {
-      // Nếu kết nối không thành công hoặc đã mất kết nối
-      if (
-        this.connected &&
-        (!this.stompClient || !this.stompClient.connected)
-      ) {
-        console.warn(
-          "WebSocket connection state mismatch detected, reconnecting..."
-        );
-        this.connected = false;
-        if (this.dispatch) {
-          this.dispatch(setWebSocketConnected(false));
-        }
-        this.reconnect();
+    if (dispatch) {
+      this.dispatch = dispatch;
+      if (dispatch.getState) {
+        this.dispatch._getState = dispatch.getState;
       }
-
-      // Kiểm tra kết nối mà không cần gửi heartbeat
-      if (this.stompClient && this.stompClient.connected) {
-        try {
-          // Kiểm tra trạng thái của đối tượng websocket gốc
-          if (
-            this.stompClient.ws &&
-            (this.stompClient.ws.readyState === 1 || // OPEN state trong WebSocket API
-              (this.stompClient.ws._transport &&
-                this.stompClient.ws._transport.readyState === 1))
-          ) {
-            // Kết nối vẫn hoạt động, không làm gì cả
-          } else {
-            throw new Error("WebSocket connection appears broken");
-          }
-        } catch (e) {
-          console.warn("Error checking WebSocket connection status:", e);
-          this.connected = false;
-          if (this.dispatch) {
-            this.dispatch(setWebSocketConnected(false));
-          }
-          this.reconnect();
-        }
-      }
-    }, 30000); // Kiểm tra mỗi 30 giây
+    }
+    if (userId) {
+      this.userId = userId;
+    }
+    if (accessToken) {
+      this.accessToken = accessToken;
+    }
   }
 
-  // Sửa lại init() để đảm bảo thứ tự khởi tạo đúng
-  init(dispatch) {
-    if (!dispatch) {
-      console.error("WebSocketService init requires a dispatch function");
-      return;
+  /**
+   * Token nằm trong Redux (persist) chứ không phải localStorage.accessToken.
+   * Hỗ trợ thêm các nguồn cũ để không phá client đang chạy.
+   */
+  getAccessToken() {
+    if (this.accessToken) {
+      return this.accessToken;
     }
-
-    // Lưu dispatch function
-    this.dispatch = dispatch;
-
-    // Lưu getState function để có thể truy xuất state
-    if (dispatch.getState) {
-      this.dispatch._getState = dispatch.getState;
-    }
-
-    console.log("WebSocketService initialized with dispatch");
-
-    // KHÔNG kết nối ngay lập tức - để MessengerPage điều khiển thời điểm kết nối
-    // Đảm bảo userId đã được set vào Redux trước khi kết nối
-  }
-
-  // Cải thiện hàm getUserId để lấy userId từ nhiều nguồn khác nhau
-  getUserId() {
-    // Cách 1: Lấy từ Redux state
     const state = this.getReduxState();
-    const reduxUserId = state?.chat?.currentUserId || state?.login?.userInfo?.id;
-    
-    // Cách 2: Lấy từ localStorage
-    const localStorageUserId = localStorage.getItem('userId') || localStorage.getItem('user_id');
-    
-    // Trả về userId từ bất kỳ nguồn nào có giá trị
-    return reduxUserId || (localStorageUserId ? parseInt(localStorageUserId) : null);
+    if (state?.login?.accessToken) {
+      return state.login.accessToken;
+    }
+    const directToken =
+      localStorage.getItem("accessToken") ||
+      sessionStorage.getItem("accessToken");
+    if (directToken) {
+      return directToken;
+    }
+    try {
+      const persistedRoot = JSON.parse(
+        localStorage.getItem("persist:root") || "{}"
+      );
+      const persistedLogin = persistedRoot.login
+        ? JSON.parse(persistedRoot.login)
+        : null;
+      if (persistedLogin?.accessToken) {
+        return persistedLogin.accessToken;
+      }
+    } catch (error) {
+      console.warn("Cannot read persisted access token:", error);
+    }
+    return null;
   }
 
-  // Thêm phương thức mới để đảm bảo có userId trước khi làm bất cứ điều gì
-  ensureUserId() {
-    const userId = this.getUserId();
-    if (!userId) {
-      console.error("No user ID available from any source");
-      return Promise.reject(new Error("No user ID available"));
+  getUserId() {
+    if (this.userId) {
+      return this.userId;
     }
-    return Promise.resolve(userId);
+    const state = this.getReduxState();
+    const reduxUserId =
+      state?.chat?.currentUserId || state?.login?.userInfo?.id;
+    const storedUserId =
+      localStorage.getItem("userId") || localStorage.getItem("user_id");
+    return reduxUserId || (storedUserId ? parseInt(storedUserId, 10) : null);
   }
 
   getReduxState() {
@@ -144,501 +105,352 @@ class WebSocketService {
     return this.dispatch._getState();
   }
 
-  connect() {
-    if (this.isReallyConnected()) return Promise.resolve();
-
-    if (this.connecting) {
-      return new Promise((resolve, reject) => {
-        const checkInterval = setInterval(() => {
-          if (this.isReallyConnected()) {
-            clearInterval(checkInterval);
-            resolve();
-          } else if (!this.connecting) {
-            clearInterval(checkInterval);
-            reject(new Error("Connection attempt failed"));
-          }
-        }, 100);
-
-        // Tăng thời gian timeout từ 10000 lên 30000
-        setTimeout(() => {
-          if (!this.isReallyConnected()) {
-            clearInterval(checkInterval);
-            this.connecting = false;
-            reject(new Error("Connection timeout"));
-          }
-        }, 30000); // Tăng lên 30 giây thay vì 10 giây
-      });
-    }
-
-    this.connecting = true;
-    this.retryCount = 0;
-    console.log("Connecting to WebSocket...");
-
-    return new Promise((resolve, reject) => {
-      try {
-        if (this.stompClient) {
-          try {
-            this.disconnect();
-          } catch (e) {
-            console.warn("Error disconnecting old client:", e);
-          }
-        }
-
-        // Đảm bảo địa chỉ WebSocket chính xác
-        const wsBaseUrl =
-          process.env.REACT_APP_API_URL || "http://localhost:8081"; // Sửa port thành 8080 nếu backend chạy trên port đó
-
-        console.log(`Connecting to WebSocket at ${wsBaseUrl}/ws`);
-        const socket = new SockJS(`${wsBaseUrl}/ws`);
-        this.stompClient = Stomp.over(socket);
-
-        // Sửa debug handler
-        this.stompClient.debug = () => { }; // Hàm rỗng thay vì null
-
-        const headers = {};
-        // Thêm token xác thực
-        const token = localStorage.getItem("accessToken");
-        if (token) {
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-
-        this.stompClient.connect(
-          headers,
-          (frame) => {
-            console.log("WebSocket connected successfully!");
-            this.connected = true;
-            this.connecting = false;
-            this.retryCount = 0; // Reset retry count on success
-
-            if (this.dispatch) {
-              this.dispatch(setWebSocketConnected(true));
-            }
-
-            this.subscribeToUserMessages();
-            this._resubscribeToActiveConversations();
-
-            resolve(frame);
-          },
-          (error) => {
-            console.error("WebSocket connection error:", error);
-            console.error(
-              "Error detail:",
-              typeof error === "string"
-                ? error
-                : error.message || "Unknown error"
-            );
-            this.connected = false;
-            this.connecting = false;
-
-            if (this.dispatch) {
-              this.dispatch(setWebSocketConnected(false));
-            }
-
-            reject(error);
-          }
-        );
-      } catch (error) {
-        console.error("Error setting up WebSocket:", error);
-        this.connected = false;
-        this.connecting = false;
-        reject(error);
-      }
-    });
-  }
-
-  reconnect() {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-    }
-
-    if (this.retryCount >= this.maxRetries) {
-      console.error(
-        `Exceeded maximum reconnection attempts (${this.maxRetries})`
-      );
-      return;
-    }
-
-    const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000); // Exponential backoff, max 30 seconds
-    this.retryCount++;
-
-    console.log(
-      `Attempting to reconnect WebSocket in ${delay / 1000} seconds (attempt ${this.retryCount
-      }/${this.maxRetries})...`
-    );
-
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect().catch((err) => {
-        console.error("Reconnection failed:", err);
-      });
-    }, delay);
-  }
-
-  // Cải thiện phương thức subscribeToUserMessages để chịu trách nhiệm hơn
-  subscribeToUserMessages() {
-    if (!this.connected || !this.stompClient) {
-      console.warn(
-        "Cannot subscribe to user messages: Not connected, will try after connecting"
-      );
-      return;
-    }
-
-    const userId = this.getUserId();
-    if (!userId) {
-      console.error("Cannot subscribe to user messages: No user ID available");
-      // Try to get userId from Redux store if available
-      const state = this.getReduxState();
-      const potentialUserId =
-        state?.login?.userInfo?.id || state?.chat?.currentUserId;
-      if (potentialUserId) {
-        console.log(`Found userId ${potentialUserId} from Redux store`);
-        this._doSubscribeToUserMessages(potentialUserId);
-      } else {
-        console.error("No user ID found in Redux store either");
-      }
-      return;
-    }
-
-    this._doSubscribeToUserMessages(userId);
-  }
-
-  // Thêm phương thức mới để xử lý subscription thực tế
-  _doSubscribeToUserMessages(userId) {
-    // Kiểm tra xem đã subscribe chưa
-    const existingSub = this.subscriptions.find(
-      (sub) => sub.id === `user-${userId}`
-    );
-    if (existingSub) {
-      console.log(`Already subscribed to user ${userId} messages`);
-      return;
-    }
-
-    try {
-      console.log(`Subscribing to user ${userId} messages queue`);
-
-      // Đăng ký cả hai kênh để đảm bảo nhận đủ tin nhắn
-      // 1. Kênh tin nhắn cá nhân - dùng để nhận thông báo 1-1
-      const subscription1 = this.stompClient.subscribe(
-        `/user/${userId}/queue/messages`,
-        (message) => this._handleIncomingMessage(message, "user-queue")
-      );
-
-      subscription1.id = `user-${userId}-queue`;
-      this.subscriptions.push(subscription1);
-
-      // 2. Kênh thông báo - để nhận các updates khác
-      const subscription2 = this.stompClient.subscribe(
-        `/user/${userId}/queue/notifications`,
-        (message) => this._handleIncomingMessage(message, "notification-queue")
-      );
-
-      subscription2.id = `user-${userId}-notifications`;
-      this.subscriptions.push(subscription2);
-
-      console.log(`Successfully subscribed to both queues for user ${userId}`);
-    } catch (error) {
-      console.error(`Error subscribing to user ${userId} messages:`, error);
-    }
-  }
-
-  // Thêm phương thức mới để xử lý tin nhắn đến
-  _handleIncomingMessage(message, source) {
-    try {
-      const receivedMessage = JSON.parse(message.body);
-      console.log(`Received message from ${source}:`, receivedMessage);
-
-      if (!this.dispatch) {
-        console.error("No dispatch function available to process message");
-        return;
-      }
-
-      // Thêm metadata để giúp debug
-      const enhancedMessage = {
-        ...receivedMessage,
-        fromWebSocket: true,
-        messageSource: source,
-        receivedAt: new Date().toISOString(),
-      };
-
-      // Dispatch message to Redux store
-      this.dispatch(addMessage(enhancedMessage));
-
-      // Nếu tin nhắn có conversationId, cập nhật conversation
-      if (enhancedMessage.conversationId) {
-        this.dispatch(updateConversationWithLatestMessage(enhancedMessage));
-
-        // Nếu tin nhắn thuộc conversation hiện tại, mark as read
-        const currentState = this.getReduxState();
-        if (
-          currentState?.chat?.currentConversation?.id ===
-          enhancedMessage.conversationId
-        ) {
-          console.log(
-            `Message belongs to current conversation, marking as read`
-          );
-          this.markAsRead(
-            enhancedMessage.conversationId,
-            currentState.chat.currentUserId
-          ).catch((err) =>
-            console.error("Error marking message as read:", err)
-          );
-        }
-      }
-    } catch (error) {
-      console.error(`Error processing message from ${source}:`, error);
-    }
-  }
-
-  subscribeToConversation(conversationId) {
-    if (!conversationId) {
-      console.error(
-        "Cannot subscribe to conversation: No conversation ID provided"
-      );
-      return Promise.reject(new Error("No conversation ID provided"));
-    }
-
-    const existingSubscription = this.subscriptions.find(
-      (sub) => sub.id === `conversation-${conversationId}`
-    );
-
-    if (existingSubscription) {
-      console.log(`Already subscribed to conversation ${conversationId}`);
-      return Promise.resolve();
-    }
-
-    if (!this.connected || !this.stompClient) {
-      return this.connect().then(() =>
-        this._doSubscribeToConversation(conversationId)
-      );
-    }
-
-    return Promise.resolve().then(() =>
-      this._doSubscribeToConversation(conversationId)
-    );
-  }
-
-  _doSubscribeToConversation(conversationId) {
-    try {
-      console.log(`Subscribing to conversation ${conversationId}`);
-      const subscription = this.stompClient.subscribe(
-        `/topic/conversation.${conversationId}`,
-        (message) => {
-          try {
-            const receivedMessage = JSON.parse(message.body);
-            console.log("Received message via WebSocket:", receivedMessage);
-
-            if (this.dispatch) {
-              this.dispatch(
-                addMessage({
-                  ...receivedMessage,
-                  fromWebSocket: true,
-                })
-              );
-            }
-          } catch (error) {
-            console.error("Error processing message:", error);
-          }
-        }
-      );
-
-      subscription.id = `conversation-${conversationId}`;
-      this.subscriptions.push(subscription);
-    } catch (error) {
-      console.error(
-        `Error subscribing to conversation ${conversationId}:`,
-        error
-      );
-    }
-  }
-
-  sendMessage(message) {
-    if (!message || !message.conversationId) {
-      console.error("Cannot send message: Invalid message data", message);
-      return Promise.reject(new Error("Invalid message data"));
-    }
-
-    if (!this.connected || !this.stompClient) {
-      console.log("Connecting before sending message");
-      return this.connect()
-        .then(() => this._doSendMessage(message))
-        .catch((err) => {
-          console.error("Failed to connect for sending message:", err);
-          return Promise.reject(err);
-        });
-    }
-
-    return this._doSendMessage(message);
-  }
-
-  _doSendMessage(message) {
-    return new Promise((resolve, reject) => {
-      if (!this.stompClient || !this.connected) {
-        console.error("STOMP client not connected in _doSendMessage");
-        return reject(new Error("STOMP client not connected"));
-      }
-
-      try {
-        console.log(
-          `Sending message to conversation ${message.conversationId}:`,
-          message
-        );
-
-        const messageToSend = {
-          id: message.id,
-          conversationId: message.conversationId,
-          senderId: message.senderId,
-          content: message.content,
-        };
-
-        this.stompClient.send(
-          `/app/chat/${message.conversationId}`,
-          {
-            "content-type": "application/json",
-          },
-          JSON.stringify(messageToSend)
-        );
-
-        console.log("Message sent successfully via WebSocket");
-        resolve(true);
-      } catch (error) {
-        console.error("Error sending message via WebSocket:", error);
-        this.handleConnectionError();
-        reject(error);
-      }
-    });
-  }
-
-  markAsRead(conversationId, userId) {
-    if (!conversationId || !userId) {
-      console.error("Cannot mark as read: Missing conversationId or userId");
-      return Promise.reject(new Error("Missing conversationId or userId"));
-    }
-
-    if (!this.connected || !this.stompClient) {
-      console.log("Connecting before marking as read");
-      return this.connect()
-        .then(() => this._doMarkAsRead(conversationId, userId))
-        .catch((err) => {
-          console.error("Failed to connect for marking as read:", err);
-          return Promise.reject(err);
-        });
-    }
-
-    return this._doMarkAsRead(conversationId, userId);
-  }
-
-  _doMarkAsRead(conversationId, userId) {
-    return new Promise((resolve, reject) => {
-      try {
-        console.log(
-          `Marking conversation ${conversationId} as read by user ${userId}`
-        );
-
-        this.stompClient.send(
-          `/app/chat/${conversationId}/read`,
-          {},
-          userId.toString()
-        );
-
-        if (this.dispatch) {
-          this.dispatch(markMessagesAsRead({ conversationId, userId }));
-        }
-
-        resolve(true);
-      } catch (error) {
-        console.error("Error marking as read:", error);
-        reject(error);
-      }
-    });
-  }
-
-  handleConnectionError() {
-    console.log("Connection error detected, attempting to reconnect...");
-    this.connected = false;
-    if (this.dispatch) {
-      this.dispatch(setWebSocketConnected(false));
-    }
-    this.reconnect();
-  }
-
-  disconnect() {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
-      this.connectionCheckInterval = null;
-    }
-
-    this.subscriptions.forEach((subscription) => {
-      try {
-        if (subscription && typeof subscription.unsubscribe === "function") {
-          subscription.unsubscribe();
-        }
-      } catch (e) {
-        console.warn("Error unsubscribing:", e);
-      }
-    });
-    this.subscriptions = [];
-
-    if (this.stompClient) {
-      try {
-        if (this.connected && this.stompClient.connected) {
-          this.stompClient.disconnect();
-          console.log("WebSocket disconnected");
-        }
-      } catch (e) {
-        console.error("Error disconnecting WebSocket:", e);
-      }
-      this.stompClient = null;
-    }
-
-    this.connected = false;
-    this.connecting = false;
-
-    if (this.dispatch) {
-      this.dispatch(setWebSocketConnected(false));
-    }
-  }
-
   isConnected() {
-    return this.connected && this.stompClient && this.stompClient.connected;
+    return !!(this.client && this.client.connected);
   }
 
-  ensureConnected() {
+  isReallyConnected() {
+    return this.isConnected();
+  }
+
+  isWebSocketConnected() {
+    return this.connected && this.isConnected();
+  }
+
+  connect() {
     if (this.isConnected()) {
       return Promise.resolve();
     }
+    if (this.connectingPromise) {
+      return this.connectingPromise;
+    }
 
-    console.log("WebSocket not connected, establishing connection...");
+    const token = this.getAccessToken();
+    if (!token) {
+      return Promise.reject(new Error("Missing access token"));
+    }
+
+    if (this.client && !this.client.active) {
+      this.client = null;
+    }
+
+    if (!this.client) {
+      this.client = new Client({
+        webSocketFactory: () => new SockJS(`${this.apiUrl}/ws`),
+        connectHeaders: { Authorization: `Bearer ${token}` },
+        reconnectDelay: 5000,
+        heartbeatIncoming: 10000,
+        heartbeatOutgoing: 10000,
+        debug: () => {},
+        beforeConnect: () => {
+          // Refresh token trước mỗi lần reconnect.
+          const freshToken = this.getAccessToken();
+          if (freshToken && this.client) {
+            this.accessToken = freshToken;
+            this.client.connectHeaders = {
+              Authorization: `Bearer ${freshToken}`,
+            };
+          }
+        },
+        onConnect: () => {
+          this.connected = true;
+          this.subscriptions.clear();
+          this._subscribeToUserQueues();
+          if (this.dispatch) {
+            this.dispatch(setWebSocketConnected(true));
+          }
+        },
+        onDisconnect: () => {
+          this.connected = false;
+          this.subscriptions.clear();
+          if (this.dispatch) {
+            this.dispatch(setWebSocketConnected(false));
+          }
+        },
+        onWebSocketClose: () => {
+          this.connected = false;
+          this.subscriptions.clear();
+          if (this.dispatch) {
+            this.dispatch(setWebSocketConnected(false));
+          }
+        },
+        onStompError: (frame) => {
+          console.error(
+            "STOMP error:",
+            frame.headers?.message || frame.body
+          );
+          this.connected = false;
+          if (this.dispatch) {
+            this.dispatch(setWebSocketConnected(false));
+          }
+        },
+      });
+    }
+
+    this.client.activate();
+    this.connectingPromise = this._waitForConnection(15000).finally(() => {
+      this.connectingPromise = null;
+    });
+    return this.connectingPromise;
+  }
+
+  _waitForConnection(timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const check = () => {
+        if (this.isConnected()) {
+          resolve();
+          return;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          reject(new Error("WebSocket connection timeout"));
+          return;
+        }
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  _subscribeToUserQueues() {
+    this._subscribe("messages", "/user/queue/messages", (frame) =>
+      this._handleIncomingMessage(frame)
+    );
+    this._subscribe("notifications", "/user/queue/notifications", (frame) => {
+      const notification = this._parse(frame);
+      if (notification) {
+        this._emit("notification", notification);
+      }
+    });
+    this._subscribe("read-receipts", "/user/queue/read-receipts", (frame) => {
+      const receipt = this._parse(frame);
+      if (receipt?.conversationId && receipt?.userId) {
+        if (this.dispatch) {
+          this.dispatch(
+            markMessagesAsReadByOther({
+              conversationId: receipt.conversationId,
+              readerId: receipt.userId,
+            })
+          );
+        }
+        this._emit("read-receipt", receipt);
+      }
+    });
+    this._subscribe("video-call", "/user/queue/video-call", (frame) => {
+      const signal = this._parse(frame);
+      if (signal) {
+        this._emit("video-call", signal);
+      }
+    });
+    this._subscribe("errors", "/user/queue/errors", (frame) => {
+      const error = this._parse(frame);
+      console.error("STOMP message error:", error);
+      this._emit("error", error);
+    });
+  }
+
+  _subscribe(key, destination, callback) {
+    if (!this.isConnected() || this.subscriptions.has(key)) {
+      return;
+    }
+    try {
+      const subscription = this.client.subscribe(destination, callback);
+      this.subscriptions.set(key, subscription);
+    } catch (error) {
+      console.error(`Cannot subscribe to ${destination}:`, error);
+    }
+  }
+
+  _parse(frame) {
+    try {
+      return frame?.body ? JSON.parse(frame.body) : null;
+    } catch (error) {
+      console.error("Cannot parse STOMP payload:", error, frame?.body);
+      return null;
+    }
+  }
+
+  _handleIncomingMessage(frame) {
+    const receivedMessage = this._parse(frame);
+    if (!receivedMessage?.conversationId) {
+      return;
+    }
+
+    if (this.dispatch) {
+      this.dispatch(
+        addMessage({
+          ...receivedMessage,
+          fromWebSocket: true,
+          receivedAt: new Date().toISOString(),
+        })
+      );
+    }
+
+    const currentState = this.getReduxState();
+    if (
+      currentState?.chat?.currentConversation?.id ===
+        receivedMessage.conversationId &&
+      receivedMessage.senderId !== this.getUserId()
+    ) {
+      this._scheduleMarkAsRead(receivedMessage.conversationId);
+    }
+  }
+
+  _scheduleMarkAsRead(conversationId) {
+    const existingTimer = this.markReadTimers.get(conversationId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.markReadTimers.delete(conversationId);
+      this.markAsRead(conversationId).catch((error) =>
+        console.error("Cannot mark messages as read:", error)
+      );
+    }, 400);
+    this.markReadTimers.set(conversationId, timer);
+  }
+
+  /**
+   * Giữ tên cũ để các component hiện tại không phải sửa nhiều. Thực chất chỉ
+   * đảm bảo đã subscribe các user queue.
+   */
+  subscribeToUserMessages() {
+    if (this.isConnected()) {
+      this._subscribeToUserQueues();
+      return Promise.resolve();
+    }
+    return this.connect().then(() => this._subscribeToUserQueues());
+  }
+
+  sendMessage(message) {
+    if (!message?.conversationId) {
+      return Promise.reject(new Error("Invalid message data"));
+    }
+    const send = () => {
+      this.client.publish({
+        destination: `/app/chat/${message.conversationId}`,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: message.content }),
+      });
+    };
+    if (!this.isConnected()) {
+      return this.connect().then(send);
+    }
+    return Promise.resolve().then(send);
+  }
+
+  markAsRead(conversationId) {
+    if (!conversationId) {
+      return Promise.reject(new Error("Missing conversationId"));
+    }
+    const send = () => {
+      this.client.publish({
+        destination: `/app/chat/${conversationId}/read`,
+        body: "",
+      });
+      const userId = this.getUserId();
+      if (userId && this.dispatch) {
+        this.dispatch(markMessagesAsRead({ conversationId, userId }));
+      }
+    };
+    if (!this.isConnected()) {
+      return this.connect().then(send);
+    }
+    return Promise.resolve().then(send);
+  }
+
+  sendNotification(toUserId, payload) {
+    if (!toUserId) {
+      return Promise.reject(new Error("Missing toUserId"));
+    }
+    const send = () => {
+      this.client.publish({
+        destination: `/app/notifications/${toUserId}`,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+    };
+    if (!this.isConnected()) {
+      return this.connect().then(send);
+    }
+    return Promise.resolve().then(send);
+  }
+
+  sendVideoSignal(toUserId, payload) {
+    if (!toUserId) {
+      return Promise.reject(new Error("Missing toUserId"));
+    }
+    const send = () => {
+      this.client.publish({
+        destination: `/app/video-call/${toUserId}`,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+    };
+    if (!this.isConnected()) {
+      return this.connect().then(send);
+    }
+    return Promise.resolve().then(send);
+  }
+
+  on(event, handler) {
+    if (typeof handler !== "function") {
+      return () => {};
+    }
+    const handlers = this.listeners.get(event) || new Set();
+    handlers.add(handler);
+    this.listeners.set(event, handlers);
+    return () => this.off(event, handler);
+  }
+
+  off(event, handler) {
+    const handlers = this.listeners.get(event);
+    if (!handlers) {
+      return;
+    }
+    handlers.delete(handler);
+    if (handlers.size === 0) {
+      this.listeners.delete(event);
+    }
+  }
+
+  _emit(event, payload) {
+    const handlers = this.listeners.get(event);
+    if (!handlers) {
+      return;
+    }
+    handlers.forEach((handler) => {
+      try {
+        handler(payload);
+      } catch (error) {
+        console.error(`Error in WebSocket listener ${event}:`, error);
+      }
+    });
+  }
+
+  ensureConnected() {
     return this.connect();
   }
 
-  initialSetupForConversation(conversationId, userId) {
-    if (!conversationId || !userId)
-      return Promise.reject(new Error("Missing parameters"));
+  disconnect() {
+    this.markReadTimers.forEach((timer) => clearTimeout(timer));
+    this.markReadTimers.clear();
+    this.subscriptions.clear();
+    this.connectingPromise = null;
 
-    return this.connect()
-      .then(() => {
-        return this._doSubscribeToConversation(conversationId);
-      })
-      .then(() => {
-        console.log(`Successfully set up conversation ${conversationId}`);
-        return true;
-      })
-      .catch((err) => {
-        console.error("Error setting up conversation:", err);
-        return false;
-      });
-  }
+    if (this.client) {
+      try {
+        this.client.deactivate();
+      } catch (error) {
+        console.warn("Error disconnecting STOMP client:", error);
+      }
+      this.client = null;
+    }
 
-  _resubscribeToActiveConversations() {
-    const currentState = this.getReduxState();
-    if (currentState?.chat?.currentConversation?.id) {
-      const conversationId = currentState.chat.currentConversation.id;
-      console.log(`Re-subscribing to active conversation: ${conversationId}`);
-      this._doSubscribeToConversation(conversationId);
+    this.connected = false;
+    this.accessToken = null;
+    if (this.dispatch) {
+      this.dispatch(setWebSocketConnected(false));
     }
   }
 }

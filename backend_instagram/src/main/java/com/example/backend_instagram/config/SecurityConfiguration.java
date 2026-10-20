@@ -66,7 +66,8 @@ public class SecurityConfiguration {
           .permitAll()
           // .anyRequest().authenticated()
           .requestMatchers("/api/v1/messages/**").authenticated()
-          .requestMatchers("/ws/**").permitAll() // Thêm dòng này
+          .requestMatchers("/ws/**", "/ws-native/**").permitAll()
+          // STOMP CONNECT được xác thực bằng StompAuthChannelInterceptor.
           .anyRequest()
           .authenticated() // 🔹 Các request khác phải đăng nhập
       )

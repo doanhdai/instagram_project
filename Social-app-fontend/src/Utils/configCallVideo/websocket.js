@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
-import SockJS from "sockjs-client";
-import { Stomp } from "@stomp/stompjs";
 import Peer from "simple-peer";
+import webSocketService from "../../Service/WebSocketService";
 
-// Sử dụng STOMP thay vì Socket.IO
-// Endpoint backend đã được consolidate sang Spring STOMP (port 8081, /ws)
-let socketInstance = null;
-
+/**
+ * Hook video call dùng chung STOMP client với Messenger/Notification.
+ * Trước đây hook này tự mở thêm 1 SockJS connection và subscribe topic công
+ * khai; giờ chỉ đăng ký listener trên user queue.
+ */
 export function useWebSocket() {
   const currentUser = useSelector((state) => state.login?.userInfo);
-  const socketRef = useRef();
+  const accessToken = useSelector((state) => state.login?.accessToken);
+
   const [me, setMe] = useState("");
   const [caller, setCaller] = useState("");
   const [name, setName] = useState("");
@@ -22,236 +23,241 @@ export function useWebSocket() {
   const [callAccepted, setCallAccepted] = useState(false);
   const [followNotifications, setFollowNotifications] = useState(null);
   const [peer, setPeer] = useState(null);
-  const [stompClient, setStompClient] = useState(null);
+  const [selectedCameraId, setSelectedCameraId] = useState(null);
+  const [availableCameras, setAvailableCameras] = useState([]);
+
+  const streamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const peerRef = useRef(null);
+  const remoteUserIdRef = useRef(null);
+
+  const stopStream = useCallback((mediaStream) => {
+    if (!mediaStream) {
+      return;
+    }
+    mediaStream.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const cleanupMedia = useCallback(() => {
+    stopStream(streamRef.current);
+    streamRef.current = null;
+    setStream(null);
+
+    stopStream(remoteStreamRef.current);
+    remoteStreamRef.current = null;
+    setRemoteStream(null);
+
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+      setPeer(null);
+    }
+
+    setIsVideoCallActive(false);
+    setCallAccepted(false);
+    setReceivingCall(false);
+    setCaller("");
+    setCallerSignal(null);
+    remoteUserIdRef.current = null;
+  }, [stopStream]);
 
   useEffect(() => {
-    // Tạo STOMP connection thay vì Socket.IO
-    // Dùng SockJS cho transport (tương thích STOMP endpoint /ws)
-    if (!socketInstance && currentUser?.id) {
-      const socketUrl = process.env.REACT_APP_API_URL || "http://localhost:8081";
-      console.log("Creating STOMP WebSocket connection:", socketUrl, "userId:", currentUser.id);
-
-      const stompClientInstance = Stomp.over(new SockJS(`${socketUrl}/ws`));
-      stompClientInstance.debug = () => {};
-
-      stompClientInstance.connect(
-        { Authorization: `Bearer ${localStorage.getItem("accessToken") || ""}` },
-        (frame) => {
-          console.log("STOMP connected successfully:", frame);
-          socketInstance = stompClientInstance;
-          setStompClient(stompClientInstance);
-          stompClientInstance.subscribe(`/topic/notifications.${currentUser.id}`, (message) => {
-            console.log("STOMP notification:", message.body);
-            try {
-              const data = JSON.parse(message.body);
-              console.log("Parsed STOMP notification:", data);
-            } catch (e) {
-              console.error("Error parsing STOMP notification:", e);
-            }
-          });
-          stompClientInstance.subscribe(`/topic/video-call.${currentUser.id}`, (message) => {
-            console.log("STOMP video call signal:", message.body);
-            try {
-              const signal = JSON.parse(message.body);
-              console.log("Parsed video call signal:", signal);
-            } catch (e) {
-              console.error("Error parsing video call signal:", e);
-            }
-          });
-        },
-        (error) => {
-          console.error("STOMP connection error:", error);
-        }
-      );
-
-
+    if (!currentUser?.id) {
+      return undefined;
     }
 
-    socketRef.current = socketInstance || stompClient;
+    let active = true;
+    webSocketService.init(undefined, currentUser.id, accessToken);
+    webSocketService.connect().catch((error) => {
+      if (active) {
+        console.error("Cannot connect WebSocket for video call:", error);
+      }
+    });
+
+    const unsubscribeVideo = webSocketService.on("video-call", (signal) => {
+      if (!active || !signal) {
+        return;
+      }
+      if (signal.action === "endCall") {
+        cleanupMedia();
+        return;
+      }
+      if (signal.signal?.type === "offer") {
+        remoteUserIdRef.current = signal.from;
+        setReceivingCall(true);
+        setCaller(signal.from);
+        setName(signal.name || "");
+        setCallerSignal(signal.signal);
+      } else if (signal.signal?.type === "answer") {
+        setCallerSignal(signal.signal);
+        if (peerRef.current) {
+          try {
+            peerRef.current.signal(signal.signal);
+          } catch (error) {
+            console.warn("Cannot apply video answer:", error);
+          }
+        }
+      }
+    });
+
+    const unsubscribeNotification = webSocketService.on(
+      "notification",
+      (notification) => setFollowNotifications(notification)
+    );
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (peer) {
-        peer.destroy();
-      }
-      if (stompClient) {
-        try {
-          stompClient.disconnect();
-          console.log("STOMP WebSocket disconnected");
-        } catch (e) {
-          console.warn("Error disconnecting STOMP:", e);
-        }
-      }
-      socketInstance = null;
+      active = false;
+      unsubscribeVideo();
+      unsubscribeNotification();
     };
-  }, [currentUser]);
+  }, [currentUser?.id, accessToken, cleanupMedia]);
 
-  const setupMediaStream = async () => {
-    try {
-      console.log("Setting up media stream...");
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-      console.log("Media stream obtained:", mediaStream.id);
-      setStream(mediaStream);
-      return mediaStream;
-    } catch (error) {
-      console.error("Error setting up media stream:", error);
-      throw error;
-    }
-  };
+  const setupMediaStream = useCallback(async () => {
+    const mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
+    streamRef.current = mediaStream;
+    setStream(mediaStream);
+    return mediaStream;
+  }, []);
 
-  const callUser = async (userToCall) => {
-    try {
-      console.log("Initiating STOMP video call to:", userToCall);
-      const mediaStream = await setupMediaStream();
-
-      // Gửi signaling qua STOMP thay vì Socket.IO emit
-      const signalData = {
-        from: currentUser.id,
-        name: currentUser.userFullname,
-        to: userToCall,
-        signal: {
-          type: "offer",
-          sdp: "STOMP video signaling placeholder - replace with actual WebRTC offer",
-        },
-      };
-
-      if (stompClient && stompClient.connected) {
-        stompClient.send(
-          `/app/video-call/${userToCall}`,
-          { "content-type": "application/json" },
-          JSON.stringify(signalData)
-        );
-        console.log("Video call signal sent via STOMP:", signalData);
-      } else {
-        console.warn("STOMP not connected - video call signal queued");
+  const callUser = useCallback(
+    async (userToCall) => {
+      if (!currentUser?.id || !userToCall) {
+        return;
       }
+      try {
+        const mediaStream = await setupMediaStream();
+        remoteUserIdRef.current = userToCall;
+        const newPeer = new Peer({
+          initiator: true,
+          trickle: false,
+          stream: mediaStream,
+        });
+        peerRef.current = newPeer;
+        setPeer(newPeer);
 
-      const newPeer = new Peer({
-        initiator: true,
-        trickle: false,
-        stream: mediaStream,
-      });
+        newPeer.on("signal", (data) => {
+          webSocketService
+            .sendVideoSignal(userToCall, {
+              from: currentUser.id,
+              name: currentUser.userFullname,
+              signal: data,
+            })
+            .catch((error) =>
+              console.error("Cannot send video offer:", error)
+            );
+        });
 
-      newPeer.on("signal", (data) => {
-        console.log("Peer signaling (offer/answer) for STOMP video call:", data);
-      });
+        newPeer.on("stream", (remoteMediaStream) => {
+          remoteStreamRef.current = remoteMediaStream;
+          setRemoteStream(remoteMediaStream);
+        });
 
-      newPeer.on("stream", (remoteMediaStream) => {
-        console.log("Received remote stream in caller");
-        setRemoteStream(remoteMediaStream);
-      });
+        setIsVideoCallActive(true);
+      } catch (error) {
+        console.error("Error in callUser:", error);
+        cleanupMedia();
+      }
+    },
+    [currentUser?.id, currentUser?.userFullname, setupMediaStream, cleanupMedia]
+  );
 
-      setPeer(newPeer);
-    } catch (error) {
-      console.error("Error in callUser:", error);
+  const answerCall = useCallback(async () => {
+    if (!currentUser?.id || !caller) {
+      return;
     }
-  };
-
-  const answerCall = async () => {
     try {
-      console.log("Answering STOMP video call from:", caller);
       const mediaStream = await setupMediaStream();
-
+      remoteUserIdRef.current = caller;
       const newPeer = new Peer({
         initiator: false,
         trickle: false,
         stream: mediaStream,
       });
+      peerRef.current = newPeer;
+      setPeer(newPeer);
 
       newPeer.on("signal", (data) => {
-        console.log("Answer signal for video call:", data);
-        // Gửi signal response qua STOMP
-        if (stompClient && stompClient.connected) {
-          stompClient.send(
-            `/app/video-call/${caller}`,
-            { "content-type": "application/json" },
-            JSON.stringify({
-              from: currentUser.id,
-              to: caller,
-              signal: { type: "answer", sdp: "STOMP answer placeholder" },
-            })
+        webSocketService
+          .sendVideoSignal(caller, {
+            from: currentUser.id,
+            name: currentUser.userFullname,
+            signal: data,
+          })
+          .catch((error) =>
+            console.error("Cannot send video answer:", error)
           );
-        }
       });
 
       newPeer.on("stream", (remoteMediaStream) => {
-        console.log("Received remote stream in answerer");
+        remoteStreamRef.current = remoteMediaStream;
         setRemoteStream(remoteMediaStream);
       });
 
+      if (callerSignal) {
+        newPeer.signal(callerSignal);
+      }
+
       setCallAccepted(true);
       setIsVideoCallActive(true);
-      setPeer(newPeer);
+      setReceivingCall(false);
     } catch (error) {
       console.error("Error in answerCall:", error);
+      cleanupMedia();
     }
-  };
+  }, [
+    currentUser?.id,
+    currentUser?.userFullname,
+    caller,
+    callerSignal,
+    setupMediaStream,
+    cleanupMedia,
+  ]);
 
-  const leaveCall = () => {
-    try {
-      if (stompClient && stompClient.connected) {
-        stompClient.send(
-          `/app/video-call/${caller}`,
-          { "content-type": "application/json" },
-          JSON.stringify({ action: "endCall", from: currentUser.id, to: caller })
+  const leaveCall = useCallback(() => {
+    const remoteUserId = remoteUserIdRef.current || caller;
+    if (remoteUserId) {
+      webSocketService
+        .sendVideoSignal(remoteUserId, { action: "endCall" })
+        .catch((error) => console.warn("Cannot send endCall:", error));
+    }
+    cleanupMedia();
+  }, [caller, cleanupMedia]);
+
+  const sendFollowNotification = useCallback(
+    ({ toUserId }) => {
+      if (!currentUser?.id || !toUserId) {
+        return;
+      }
+      const displayName =
+        currentUser.userFullname || currentUser.name || "Unknown";
+      webSocketService
+        .sendNotification(toUserId, {
+          fromUserId: String(currentUser.id),
+          fromUserName: displayName,
+          toUserId: String(toUserId),
+          message: `${displayName} vừa theo dõi bạn.`,
+          sentAt: new Date().toISOString(),
+        })
+        .catch((error) =>
+          console.warn("Cannot send follow notification:", error)
         );
-      }
+    },
+    [currentUser?.id, currentUser?.userFullname, currentUser?.name]
+  );
 
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-          stream.removeTrack(track);
-        });
-        setStream(null);
-      }
-
-      if (remoteStream) {
-        remoteStream.getTracks().forEach((track) => {
-          track.stop();
-          remoteStream.removeTrack(track);
-        });
-        setRemoteStream(null);
-      }
-
-      if (peer) {
-        peer.destroy();
-        setPeer(null);
-      }
-
-      setIsVideoCallActive(false);
-      setCallAccepted(false);
-      setReceivingCall(false);
-      setCaller("");
-      setCallerSignal(null);
-    } catch (error) {
-      console.error("Error in leaveCall:", error);
-    }
-  };
-
-  const sendFollowNotification = ({ toUserId }) => {
-    if (stompClient && stompClient.connected) {
-      const payload = {
-        fromUserId: String(currentUser.id),
-        fromUserName: currentUser.userFullname || currentUser.name || "Unknown",
-        toUserId: String(toUserId),
-        message: `${currentUser.userFullname || currentUser.name || "Unknown"} vừa theo dõi bạn.`,
-        sentAt: new Date().toISOString(),
-      };
-      stompClient.send(
-        `/app/notifications/${toUserId}`,
-        { "content-type": "application/json" },
-        JSON.stringify(payload)
+  const listCameras = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAvailableCameras(
+        devices.filter((device) => device.kind === "videoinput")
       );
-      console.log("STOMP follow notification sent:", payload);
-    } else {
-      console.warn("STOMP not connected for follow notification");
+    } catch (error) {
+      console.warn("Cannot enumerate cameras:", error);
     }
-  };
+  }, []);
 
   return {
     me,
@@ -263,11 +269,16 @@ export function useWebSocket() {
     isVideoCallActive,
     stream,
     remoteStream,
-    socketRef,
     callUser,
     answerCall,
     leaveCall,
     sendFollowNotification,
     followNotifications,
+    selectedCameraId,
+    setSelectedCameraId,
+    availableCameras,
+    listCameras,
+    peer,
+    setMe,
   };
 }

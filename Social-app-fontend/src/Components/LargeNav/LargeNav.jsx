@@ -28,7 +28,7 @@ const LargeNav = () => {
   const [openSearch, setOpenSearch] = useState(false);
   const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState([]);
-  const { userInfo } = useSelector((state) => state.login);
+  const { userInfo, accessToken } = useSelector((state) => state.login);
   const dispatch = useDispatch();
   const [t] = useTranslation();
 
@@ -37,34 +37,39 @@ const LargeNav = () => {
     if (!userInfo?.id) return;
 
     // Khởi tạo WebSocket
-    notificationSocket.init(dispatch, userInfo.id);
+    notificationSocket.init(dispatch, userInfo.id, accessToken);
 
-    notificationSocket.subscribeToNotifications((notificationData) => {
-      console.log("New notification received:", notificationData);
-      // Hiển thị dấu chấm đỏ nếu người dùng hiện tại là receiver
-      if (notificationData.userId === userInfo.id) {
+    const unsubscribeNotifications =
+      notificationSocket.subscribeToNotifications((notificationData) => {
+        console.log("New notification received:", notificationData);
+        // Hiển thị dấu chấm đỏ nếu người dùng hiện tại là receiver
+        if (notificationData.userId === userInfo.id) {
+          setHasUnreadNotifications(true);
+        } else {
+          console.log("Ignoring notification:", notificationData);
+        }
+      });
+
+    const unsubscribeLikes = notificationSocket.subscribeToLikeUpdates(
+      (notification) => {
+        console.log("New like received:", notification);
+        // if (Number(notification.receiverId) === Number(userInfo.id)) {
         setHasUnreadNotifications(true);
-      } else {
-        console.log("Ignoring notification:", notificationData);
+        // }
       }
-    });
-
-    notificationSocket.subscribeToLikeUpdates((notification) => {
-      console.log("New like received:", notification);
-      // if (Number(notification.receiverId) === Number(userInfo.id)) {
-      setHasUnreadNotifications(true);
-      // }
-    });
+    );
 
     // Lắng nghe sự kiện bình luận mới
-    notificationSocket.subscribeToCommentUpdates((commentData) => {
-      console.log("New comment received:", commentData);
-      if (commentData.userId != userInfo.id) {
-        setHasUnreadNotifications(true);
+    const unsubscribeComments = notificationSocket.subscribeToCommentUpdates(
+      (commentData) => {
+        console.log("New comment received:", commentData);
+        if (commentData.userId != userInfo.id) {
+          setHasUnreadNotifications(true);
+        }
       }
-    });
+    );
 
-    notificationSocket.subscribeToFollow((data) => {
+    const unsubscribeFollow = notificationSocket.subscribeToFollow((data) => {
       console.log("New follow received:", data);
       // if (data.userId != userInfo.id) {
       setHasUnreadNotifications(true);
@@ -72,9 +77,12 @@ const LargeNav = () => {
     });
 
     return () => {
-      notificationSocket.disconnect();
+      unsubscribeNotifications();
+      unsubscribeLikes();
+      unsubscribeComments();
+      unsubscribeFollow();
     };
-  }, [userInfo?.id, dispatch]);
+  }, [userInfo?.id, accessToken, dispatch]);
 
   const sidebarItems = useMemo(
     () => [

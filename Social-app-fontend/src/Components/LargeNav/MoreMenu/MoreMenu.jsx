@@ -8,6 +8,7 @@ import { userLogoutALL } from "../../../Redux/Reducer/UserAppDeucer";
 import { toast } from "react-toastify";
 import { useDispatch, useSelector } from "react-redux";
 import instance from "../../../Utils/AxiosApi/Axios";
+import webSocketService from "../../../Service/WebSocketService";
 
 const MoreMenu = (props) => {
   const { showMenu, setShowMenu } = props;
@@ -24,6 +25,7 @@ const MoreMenu = (props) => {
       let res = await UserLogOut();
       if (res && res.statusCode === 200) {
         toast.success("Đăng xuất thành công!");
+        webSocketService.disconnect();
         await dispatch(userLogoutALL());
         instance.defaults.headers.common = {};
       } else {

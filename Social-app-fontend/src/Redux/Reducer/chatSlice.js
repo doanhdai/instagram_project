@@ -121,9 +121,7 @@ const reconnectWebSocket = createAsyncThunk(
     if (state.chat.currentConversation?.id && state.chat.currentUserId) {
       try {
         await webSocketService.connect();
-        if (state.chat.currentConversation?.id) {
-          await webSocketService.subscribeToConversation(state.chat.currentConversation.id);
-        }
+        await webSocketService.subscribeToUserMessages();
         return true;
       } catch (error) {
         console.error('Failed to reconnect WebSocket:', error);
@@ -158,15 +156,35 @@ const chatSlice = createSlice({
       }
       
       const isDuplicate = state.messages.some(msg => 
-        (msg.id && msg.id === message.id) ||
+        (msg.id && message.id && msg.id === message.id) ||
         (msg.tempId && message.tempId && msg.tempId === message.tempId) ||
-        (msg.content === message.content && 
+        (!msg.id &&
+         msg.content === message.content && 
          msg.senderId === message.senderId && 
          msg.conversationId === message.conversationId &&
          Math.abs(new Date(msg.createdAt || 0) - new Date(message.createdAt || 0)) < 2000)
       );
       
       if (isDuplicate) {
+        // Nếu tin nhắn server tới trước response REST, thay temp message bằng
+        // bản đã lưu để tránh temp bị treo ở trạng thái pending.
+        if (message.id) {
+          const pendingIndex = state.messages.findIndex(
+            (msg) =>
+              msg.tempId &&
+              !msg.id &&
+              msg.conversationId === message.conversationId &&
+              msg.senderId === message.senderId &&
+              msg.content === message.content
+          );
+          if (pendingIndex >= 0) {
+            state.messages[pendingIndex] = {
+              ...state.messages[pendingIndex],
+              ...message,
+              pending: false,
+            };
+          }
+        }
         console.log('Duplicate message detected, ignoring:', message);
         return;
       }
@@ -222,6 +240,37 @@ const chatSlice = createSlice({
       }
     },
     
+    /**
+     * Read receipt do user khác gửi: chỉ đánh dấu các tin nhắn MÌNH đã gửi là
+     * đã đọc. Không được reset unreadCount của mình.
+     */
+    markMessagesAsReadByOther: (state, action) => {
+      const { conversationId, readerId } = action.payload || {};
+
+      if (!conversationId || !readerId) {
+        return;
+      }
+
+      state.messages.forEach((msg) => {
+        if (
+          msg.conversationId === conversationId &&
+          msg.senderId === state.currentUserId
+        ) {
+          msg.isRead = true;
+        }
+      });
+
+      const conversation = state.conversations.find(
+        (c) => c.id === conversationId
+      );
+      if (
+        conversation?.lastMessage &&
+        conversation.lastMessage.senderId === state.currentUserId
+      ) {
+        conversation.lastMessage.isRead = true;
+      }
+    },
+
     setActiveConversation: (state, action) => {
       const conversationId = action.payload;
       const conversation = state.conversations.find(c => c.id === conversationId);
@@ -493,6 +542,7 @@ export const getConversationById = createAsyncThunk(
 export const { 
   addMessage, 
   markMessagesAsRead,
+  markMessagesAsReadByOther,
   setActiveConversation,
   setCurrentUserId,
   setWebSocketConnected,

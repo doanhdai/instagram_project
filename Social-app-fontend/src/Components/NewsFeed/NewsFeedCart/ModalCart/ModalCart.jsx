@@ -43,20 +43,22 @@ const ModalCart = ({
 
   useEffect(() => {
     // notificationSocket.init(dispatch, userInfo.id);
-    notificationSocket.subscribeToCommentUpdates((comment) => {
-      if (comment.postId === post.id) {
-        setComments((prev) => {
-          if (prev.some((c) => c.id === comment.id)) return prev;
-          return [comment, ...prev];
-        });
-        if (comment.commentsCount != null) {
-          setCommentsCount(comment.commentsCount);
-          onCommentAdded(post.id, comment.commentsCount);
+    const unsubscribeComments = notificationSocket.subscribeToCommentUpdates(
+      (comment) => {
+        if (comment.postId === post.id) {
+          setComments((prev) => {
+            if (prev.some((c) => c.id === comment.id)) return prev;
+            return [comment, ...prev];
+          });
+          if (comment.commentsCount != null) {
+            setCommentsCount(comment.commentsCount);
+            onCommentAdded(post.id, comment.commentsCount);
+          }
         }
       }
-    });
+    );
     return () => {
-      notificationSocket.disconnect();
+      unsubscribeComments();
     };
   }, [userInfo?.id, dispatch, post?.id]);
 
