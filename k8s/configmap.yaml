@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: instagram-config
+  labels:
+    app.kubernetes.io/part-of: instagram
+data:
+  SERVER_PORT: "8081"
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_NAME: backend_instagram
+  DB_USERNAME: instagram_user
+  DDL_AUTO: update
+
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  CACHE_TTL_POSTS: "60"
+  CACHE_TTL_COMMENTS: "60"
+  CACHE_TTL_USER_STATS: "120"
+
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_COOKIE_SAME_SITE: Lax
+  CORS_ALLOWED_ORIGINS: http://instagram.local
+
+  REGION: ap-southeast-1
+  BUCKET_NAME: instagram-media
+  S3_ENDPOINT: http://localstack:4566
+  # Trình duyệt truy cập S3 qua Ingress (path /s3 -> localstack)
+  S3_PUBLIC_ENDPOINT: http://instagram.local/s3

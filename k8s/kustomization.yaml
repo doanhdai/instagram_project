@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: instagram
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - mysql.yaml
+  - redis.yaml
+  - localstack.yaml
+  - backend.yaml
+  - frontend.yaml
+  - seed-job.yaml
+  - ingress.yaml
+
+# Secret được tạo riêng từ .env bằng ./k8s/create-secrets.sh (không commit file thật)
+configMapGenerator:
+  - name: seed-demo-sql
+    files:
+      - seed-demo.sql=../backend_instagram/seed-demo.sql
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: instagram-backend
+    newName: instagram-backend
+    newTag: local
+  - name: instagram-frontend
+    newName: instagram-frontend
+    newTag: local

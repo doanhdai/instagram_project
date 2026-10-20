@@ -13,14 +13,17 @@ public class UserStatsDTO {
     private Long followersCount;
     private Long followingCount;
     private Long postsCount;
-    public UserStatsDTO(User user, Long followersCount, Long followingCount, Long postsCount) {
-        this.userId = user.getId();
-        this.username = user.getUserNickname();
-        this.userNickname = user.getUserNickname();
-        this.avatar = user.getUserImage();
-        this.bio = user.getUserBio();
-        this.followersCount = followersCount;
-        this.followingCount = followingCount;
-        this.postsCount = postsCount;
+
+    public static UserStatsDTO from(User user, Long followersCount, Long followingCount, Long postsCount) {
+        UserStatsDTO dto = new UserStatsDTO();
+        dto.setUserId(user.getId());
+        dto.setUsername(user.getUserNickname());
+        dto.setUserNickname(user.getUserNickname());
+        dto.setAvatar(user.getUserImage());
+        dto.setBio(user.getUserBio());
+        dto.setFollowersCount(followersCount);
+        dto.setFollowingCount(followingCount);
+        dto.setPostsCount(postsCount);
+        return dto;
     }
-} 
+}

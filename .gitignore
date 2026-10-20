@@ -5,6 +5,7 @@
 **/.env.local
 .env.*.local
 **/.env.*.local
+k8s/secret.yaml
 
 # Generated dependencies and builds
 **/node_modules/
