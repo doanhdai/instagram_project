@@ -1,0 +1,18 @@
+# Local secrets
+.env
+**/.env
+.env.local
+**/.env.local
+.env.*.local
+**/.env.*.local
+
+# Generated dependencies and builds
+**/node_modules/
+**/build/
+**/target/
+
+# Local tooling and logs
+.vscode/
+.idea/
+.DS_Store
+*.log

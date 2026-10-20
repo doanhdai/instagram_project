@@ -22,6 +22,10 @@ module.exports = function override(config) {
     crypto: require.resolve("crypto-browserify"),
     path: require.resolve("path-browserify"),
   };
+  config.resolve.alias = {
+    ...config.resolve.alias,
+    "process/browser$": require.resolve("process/browser.js"),
+  };
 
   config.plugins = [
     ...config.plugins,

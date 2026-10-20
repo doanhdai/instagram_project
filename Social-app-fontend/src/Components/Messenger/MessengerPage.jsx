@@ -2,7 +2,6 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { v4 as uuidv4 } from "uuid";
 import {
   getConversations,
   getMessagesByConversation,
@@ -647,7 +646,7 @@ const MessengerPage = () => {
       setNewMessage("");
     }
 
-    const tempId = `temp-${uuidv4()}`;
+    const tempId = `temp-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
 
     const messageData = {

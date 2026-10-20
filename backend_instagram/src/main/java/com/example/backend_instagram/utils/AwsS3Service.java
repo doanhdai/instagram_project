@@ -1,18 +1,14 @@
 package com.example.backend_instagram.utils;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
-import io.github.cdimascio.dotenv.Dotenv;
+import org.springframework.beans.factory.annotation.Value;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
-
-
-
+import java.net.URI;
 
 @Service
 public class AwsS3Service {
@@ -20,20 +16,28 @@ public class AwsS3Service {
     private final String bucketName;
     private final String region; 
     
-    private static final Dotenv dotenv = Dotenv.load();
+    private final String publicEndpoint;
 
-    public AwsS3Service() {
-        String accessKey = dotenv.get("ACCESS_KEY");
-        String secretKey = dotenv.get("SECRET_KEY");
-        this.region = dotenv.get("REGION");  
-        this.bucketName = dotenv.get("BUCKET_NAME");
+    public AwsS3Service(
+            @Value("${aws.access-key-id}") String accessKey,
+            @Value("${aws.secret-access-key}") String secretKey,
+            @Value("${aws.region}") String region,
+            @Value("${aws.s3.bucket}") String bucketName,
+            @Value("${aws.s3.endpoint:}") String endpoint,
+            @Value("${aws.s3.public-endpoint:}") String publicEndpoint) {
+        this.region = region;
+        this.bucketName = bucketName;
+        this.publicEndpoint = publicEndpoint;
 
-        this.s3Client = S3Client.builder()
+        var builder = S3Client.builder()
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(accessKey, secretKey)
-                ))
-                .build();
+                ));
+        if (!endpoint.isBlank()) {
+            builder.endpointOverride(URI.create(endpoint)).forcePathStyle(true);
+        }
+        this.s3Client = builder.build();
     }
     public String uploadFile(String fileName, byte[] fileData) {
         try {
@@ -47,7 +51,9 @@ public class AwsS3Service {
 
             s3Client.putObject(request, RequestBody.fromBytes(fileData));
 
-            return "https://" + bucketName + ".s3." + region + ".amazonaws.com/" + fileName;
+            return publicEndpoint.isBlank()
+                    ? "https://" + bucketName + ".s3." + region + ".amazonaws.com/" + fileName
+                    : publicEndpoint.replaceAll("/$", "") + "/" + bucketName + "/" + fileName;
         } catch (Exception e) {
             throw new RuntimeException("Lỗi upload file lên S3: " + e.getMessage());
         }

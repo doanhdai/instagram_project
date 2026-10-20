@@ -25,7 +25,7 @@ public class Conversation {
     private String name;
     
     @Column(name = "is_group_chat")
-    private Boolean isGroupChat = false;
+    private Boolean isGroupChat;
 
     @CreationTimestamp
     @Column(name = "created_at")

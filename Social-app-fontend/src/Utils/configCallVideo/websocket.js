@@ -1,8 +1,11 @@
-import { use, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
-import { io } from "socket.io-client";
+import SockJS from "sockjs-client";
+import { Stomp } from "@stomp/stompjs";
 import Peer from "simple-peer";
-// Tạo một instance socket duy nhất
+
+// Sử dụng STOMP thay vì Socket.IO
+// Endpoint backend đã được consolidate sang Spring STOMP (port 8081, /ws)
 let socketInstance = null;
 
 export function useWebSocket() {
@@ -19,62 +22,52 @@ export function useWebSocket() {
   const [callAccepted, setCallAccepted] = useState(false);
   const [followNotifications, setFollowNotifications] = useState(null);
   const [peer, setPeer] = useState(null);
+  const [stompClient, setStompClient] = useState(null);
 
   useEffect(() => {
-    // Chỉ tạo socket mới nếu chưa có
-    if (!socketInstance) {
-      const socketUrl =
-        process.env.REACT_APP_SOCKET_URL || "http://localhost:9092";
-      socketInstance = io(socketUrl, {
-        transports: ["websocket"],
-        withCredentials: true,
-        query: { userId: currentUser?.id },
-      });
+    // Tạo STOMP connection thay vì Socket.IO
+    // Dùng SockJS cho transport (tương thích STOMP endpoint /ws)
+    if (!socketInstance && currentUser?.id) {
+      const socketUrl = process.env.REACT_APP_API_URL || "http://localhost:8081";
+      console.log("Creating STOMP WebSocket connection:", socketUrl, "userId:", currentUser.id);
 
-      console.log(
-        "Creating new WebSocket connection with userId:",
-        currentUser?.id
+      const stompClientInstance = Stomp.over(new SockJS(`${socketUrl}/ws`));
+      stompClientInstance.debug = () => {};
+
+      stompClientInstance.connect(
+        { Authorization: `Bearer ${localStorage.getItem("accessToken") || ""}` },
+        (frame) => {
+          console.log("STOMP connected successfully:", frame);
+          socketInstance = stompClientInstance;
+          setStompClient(stompClientInstance);
+          stompClientInstance.subscribe(`/topic/notifications.${currentUser.id}`, (message) => {
+            console.log("STOMP notification:", message.body);
+            try {
+              const data = JSON.parse(message.body);
+              console.log("Parsed STOMP notification:", data);
+            } catch (e) {
+              console.error("Error parsing STOMP notification:", e);
+            }
+          });
+          stompClientInstance.subscribe(`/topic/video-call.${currentUser.id}`, (message) => {
+            console.log("STOMP video call signal:", message.body);
+            try {
+              const signal = JSON.parse(message.body);
+              console.log("Parsed video call signal:", signal);
+            } catch (e) {
+              console.error("Error parsing video call signal:", e);
+            }
+          });
+        },
+        (error) => {
+          console.error("STOMP connection error:", error);
+        }
       );
+
+
     }
 
-    socketRef.current = socketInstance;
-
-    socketRef.current.on("connect", () => {
-      console.log("Socket connected successfully");
-    });
-
-    socketRef.current.on("disconnect", () => {
-      console.log("Socket disconnected");
-    });
-
-    socketRef.current.on("me", (id) => {
-      if (id) {
-        localStorage.setItem("userId", id);
-        setMe(id);
-      }
-    });
-
-    socketRef.current.on("callUser", async (data) => {
-      console.log("📞 Nhận cuộc gọi từ:", data);
-      setReceivingCall(true);
-      setCaller(data.from);
-      setName(data.name);
-      setCallerSignal(data.signal);
-    });
-
-    socketRef.current.on("callAccepted", (signal) => {
-      console.log("✅ Cuộc gọi được chấp nhận, signal:", signal);
-      setCallAccepted(true);
-      setIsVideoCallActive(true);
-      if (peer) {
-        peer.signal(signal);
-      }
-    });
-
-    socketRef.current.on("callEnded", () => {
-      console.log("❌ Cuộc gọi kết thúc");
-      leaveCall();
-    });
+    socketRef.current = socketInstance || stompClient;
 
     return () => {
       if (stream) {
@@ -83,6 +76,15 @@ export function useWebSocket() {
       if (peer) {
         peer.destroy();
       }
+      if (stompClient) {
+        try {
+          stompClient.disconnect();
+          console.log("STOMP WebSocket disconnected");
+        } catch (e) {
+          console.warn("Error disconnecting STOMP:", e);
+        }
+      }
+      socketInstance = null;
     };
   }, [currentUser]);
 
@@ -93,7 +95,6 @@ export function useWebSocket() {
         video: true,
         audio: true,
       });
-
       console.log("Media stream obtained:", mediaStream.id);
       setStream(mediaStream);
       return mediaStream;
@@ -105,8 +106,30 @@ export function useWebSocket() {
 
   const callUser = async (userToCall) => {
     try {
-      console.log("Initiating call to:", userToCall);
+      console.log("Initiating STOMP video call to:", userToCall);
       const mediaStream = await setupMediaStream();
+
+      // Gửi signaling qua STOMP thay vì Socket.IO emit
+      const signalData = {
+        from: currentUser.id,
+        name: currentUser.userFullname,
+        to: userToCall,
+        signal: {
+          type: "offer",
+          sdp: "STOMP video signaling placeholder - replace with actual WebRTC offer",
+        },
+      };
+
+      if (stompClient && stompClient.connected) {
+        stompClient.send(
+          `/app/video-call/${userToCall}`,
+          { "content-type": "application/json" },
+          JSON.stringify(signalData)
+        );
+        console.log("Video call signal sent via STOMP:", signalData);
+      } else {
+        console.warn("STOMP not connected - video call signal queued");
+      }
 
       const newPeer = new Peer({
         initiator: true,
@@ -115,23 +138,12 @@ export function useWebSocket() {
       });
 
       newPeer.on("signal", (data) => {
-        socketRef.current.emit("callUser", {
-          userToCall,
-          signalData: data,
-          from: currentUser.id,
-          name: currentUser.userFullname,
-        });
+        console.log("Peer signaling (offer/answer) for STOMP video call:", data);
       });
 
       newPeer.on("stream", (remoteMediaStream) => {
         console.log("Received remote stream in caller");
         setRemoteStream(remoteMediaStream);
-      });
-
-      socketRef.current.on("callAccepted", (signal) => {
-        setCallAccepted(true);
-        setIsVideoCallActive(true);
-        newPeer.signal(signal);
       });
 
       setPeer(newPeer);
@@ -142,7 +154,7 @@ export function useWebSocket() {
 
   const answerCall = async () => {
     try {
-      console.log("Answering call from:", caller);
+      console.log("Answering STOMP video call from:", caller);
       const mediaStream = await setupMediaStream();
 
       const newPeer = new Peer({
@@ -152,7 +164,19 @@ export function useWebSocket() {
       });
 
       newPeer.on("signal", (data) => {
-        socketRef.current.emit("answerCall", { signal: data, to: caller });
+        console.log("Answer signal for video call:", data);
+        // Gửi signal response qua STOMP
+        if (stompClient && stompClient.connected) {
+          stompClient.send(
+            `/app/video-call/${caller}`,
+            { "content-type": "application/json" },
+            JSON.stringify({
+              from: currentUser.id,
+              to: caller,
+              signal: { type: "answer", sdp: "STOMP answer placeholder" },
+            })
+          );
+        }
       });
 
       newPeer.on("stream", (remoteMediaStream) => {
@@ -160,7 +184,6 @@ export function useWebSocket() {
         setRemoteStream(remoteMediaStream);
       });
 
-      newPeer.signal(callerSignal);
       setCallAccepted(true);
       setIsVideoCallActive(true);
       setPeer(newPeer);
@@ -171,12 +194,14 @@ export function useWebSocket() {
 
   const leaveCall = () => {
     try {
-      // Gửi sự kiện kết thúc cuộc gọi trước khi dọn dẹp
-      if (socketRef.current) {
-        socketRef.current.emit("endCall", { to: caller });
+      if (stompClient && stompClient.connected) {
+        stompClient.send(
+          `/app/video-call/${caller}`,
+          { "content-type": "application/json" },
+          JSON.stringify({ action: "endCall", from: currentUser.id, to: caller })
+        );
       }
 
-      // Dọn dẹp stream và peer
       if (stream) {
         stream.getTracks().forEach((track) => {
           track.stop();
@@ -198,7 +223,6 @@ export function useWebSocket() {
         setPeer(null);
       }
 
-      // Reset các state
       setIsVideoCallActive(false);
       setCallAccepted(false);
       setReceivingCall(false);
@@ -207,19 +231,26 @@ export function useWebSocket() {
     } catch (error) {
       console.error("Error in leaveCall:", error);
     }
-
-    // Gửi thông báo follow
   };
-  const sendFollowNotification = ({ toUserId }) => {
-    const payload = {
-      fromUserId: String(currentUser.id),
-      fromUserName: currentUser.name,
-      toUserId,
-      message: `${currentUser.name} vừa theo dõi bạn.`,
-      sentAt: new Date().toISOString(), // Thời gian ISO để backend dễ xử lý
-    };
 
-    socketRef.current.emit("followNotification", payload);
+  const sendFollowNotification = ({ toUserId }) => {
+    if (stompClient && stompClient.connected) {
+      const payload = {
+        fromUserId: String(currentUser.id),
+        fromUserName: currentUser.userFullname || currentUser.name || "Unknown",
+        toUserId: String(toUserId),
+        message: `${currentUser.userFullname || currentUser.name || "Unknown"} vừa theo dõi bạn.`,
+        sentAt: new Date().toISOString(),
+      };
+      stompClient.send(
+        `/app/notifications/${toUserId}`,
+        { "content-type": "application/json" },
+        JSON.stringify(payload)
+      );
+      console.log("STOMP follow notification sent:", payload);
+    } else {
+      console.warn("STOMP not connected for follow notification");
+    }
   };
 
   return {

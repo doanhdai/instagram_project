@@ -1,11 +1,13 @@
-import io from "socket.io-client";
+import { Client } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
 import { toast } from "react-toastify";
 
-class NotificationSocket {
+class NotificationWebSocket {
   constructor() {
-    this.socket = null;
+    // Dùng STOMP endpoint thay vì Socket.IO (port 8081, không phải 9092)
+    this.apiUrl = (process.env.REACT_APP_API_URL || "http://localhost:8081").replace(/\/+$/, "");
+    this.client = null;
     this.connected = false;
-    this.apiUrl = "http://localhost:9092";
     this.reconnectTimeout = null;
     this.retryCount = 0;
     this.maxRetries = 5;
@@ -18,55 +20,63 @@ class NotificationSocket {
     }
     this.dispatch = dispatch;
     this.userId = userId;
-    console.log(`Initializing WebSocket for userId=${userId}`);
+    console.log(`Initializing STOMP WebSocket for userId=${userId}`);
     this.connect();
   }
 
   connect() {
     if (this.connected) {
-      console.log("Socket.IO already connected");
+      console.log("STOMP WebSocket already connected");
       return Promise.resolve();
     }
 
-    console.log(
-      `Connecting to Socket.IO at ${this.apiUrl} with userId=${this.userId}`
-    );
-    this.socket = io(this.apiUrl, {
-      query: { userId: this.userId },
-      transports: ["websocket"],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+    console.log(`Connecting to STOMP at ${this.apiUrl} with userId=${this.userId}`);
+
+    // Tạo STOMP client
+    this.client = new Client({
+      webSocketFactory: () => new SockJS(`${this.apiUrl}/ws`),
+      reconnectDelay: 1000,
+      heartbeatIncoming: 4000,
+      heartbeatOutgoing: 4000,
     });
 
+    this.client.onConnect = (frame) => {
+      console.log("STOMP connected:", frame);
+      this.connected = true;
+      this.retryCount = 0;
+    };
+
+    this.client.onStompError = (frame) => {
+      console.error("STOMP error:", frame.headers?.message || frame.body);
+      this.connected = false;
+      this.reconnect();
+    };
+
+    this.client.onWebSocketError = (event) => {
+      console.error("STOMP connection error:", event);
+      this.connected = false;
+      this.reconnect();
+    };
+
+    this.client.onWebSocketClose = (event) => {
+      console.log("STOMP WebSocket disconnected");
+      this.connected = false;
+      this.reconnect();
+    };
+
+    this.client.activate();
+
     return new Promise((resolve, reject) => {
-      this.socket.on("connect", () => {
-        // console.log("✅ Socket.IO connected, socketId: ", this.socket.id);
-        this.connected = true;
-        this.retryCount = 0;
-        resolve();
-      });
-
-      this.socket.on("connect_error", (error) => {
-        console.error("Socket.IO connection error:", error);
-        this.connected = false;
-        this.reconnect();
-        reject(error);
-      });
-
-      this.socket.on("disconnect", () => {
-        console.log("Socket.IO disconnected");
-        this.connected = false;
-        this.reconnect();
-      });
-
-      this.socket.on("me", (userId) => {
-        console.log("Received 'me' event: userId=", userId);
-      });
-
-      this.socket.onAny((event, ...args) => {
-        console.log(`Received event: ${event}`, args);
-      });
+      const checkConnected = () => {
+        if (this.connected) {
+          resolve();
+        } else if (this.retryCount >= this.maxRetries) {
+          reject(new Error("Failed to connect to STOMP server"));
+        } else {
+          setTimeout(checkConnected, 500);
+        }
+      };
+      checkConnected();
     });
   }
 
@@ -76,9 +86,7 @@ class NotificationSocket {
     }
 
     if (this.retryCount >= this.maxRetries) {
-      console.error(
-        `Exceeded maximum reconnection attempts (${this.maxRetries})`
-      );
+      console.error(`Exceeded maximum reconnection attempts (${this.maxRetries})`);
       toast.error("Mất kết nối với máy chủ, vui lòng thử lại sau!");
       return;
     }
@@ -86,9 +94,7 @@ class NotificationSocket {
     const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
     this.retryCount++;
     console.log(
-      `Reconnecting in ${delay / 1000} seconds (attempt ${this.retryCount}/${
-        this.maxRetries
-      })...`
+      `Reconnecting in ${delay / 1000} seconds (attempt ${this.retryCount}/${this.maxRetries})...`
     );
 
     this.reconnectTimeout = setTimeout(() => {
@@ -99,132 +105,88 @@ class NotificationSocket {
   }
 
   subscribeToNotifications(callback) {
-    if (!this.socket) {
-      console.warn("Cannot subscribe to notifications: Socket not initialized");
+    if (!this.client || !this.connected) {
+      console.warn("Cannot subscribe to notifications: STOMP not connected");
       return;
     }
-    this.socket.off("notification");
-    console.log(`Subscribing to notifications for userId=${this.userId}`);
-    this.socket.on("notification", (data) => {
-      console.log("Raw notification data:", data);
-      let notification;
+    // Subscribe to /topic/notifications.{userId} (STOMP topic from backend)
+    this.client.subscribe(`/topic/notifications.${this.userId}`, (message) => {
+      console.log("Raw STOMP notification:", message.body);
       try {
-        const jsonData = Array.isArray(data) ? data[0] : data;
-        notification =
-          typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
+        const notification = JSON.parse(message.body);
         console.log("Parsed notification:", notification);
         if (typeof callback === "function") {
           callback(notification);
         }
       } catch (e) {
-        console.error(
-          "Error parsing or processing notification:",
-          e,
-          "Raw data:",
-          data
-        );
-        return;
+        console.error("Error parsing notification:", e, "Raw body:", message.body);
       }
     });
-
-    if (!this.connected) {
-      console.warn("Socket not connected when subscribing to notifications");
-    }
+    console.log(`Subscribed to STOMP notifications for userId=${this.userId}`);
   }
 
   subscribeToLikeUpdates(callback) {
-    if (!this.socket) {
-      console.warn("Cannot subscribe to like updates: Socket not initialized");
+    if (!this.client || !this.connected) {
+      console.warn("Cannot subscribe to like updates: STOMP not connected");
       return;
     }
-
-    this.socket.off("like_update");
-
-    this.socket.on("like_update", (data) => {
-      console.log("Received like update:", data);
-      
-      let notification;
+    this.client.subscribe(`/topic/notifications.${this.userId}`, (message) => {
       try {
-        const jsonData = Array.isArray(data) ? data[0] : data;
-        notification =
-          typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
-        console.log("Parsed notification:", notification);
-        if (typeof callback === "function") {
-          callback(notification);
+        const data = JSON.parse(message.body);
+        // Filter like updates by checking type field
+        if ((data && data.type === "LIKE") || (data && data.message && data.message.includes("liked"))) {
+          console.log("Received like update:", data);
+          if (typeof callback === "function") {
+            callback(data);
+          }
         }
       } catch (e) {
-        console.error(
-          "Error parsing or processing notification:",
-          e,
-          "Raw data:",
-          data
-        );
-        return;
+        console.error("Error processing like update:", e);
       }
     });
   }
 
-
-
   subscribeToCommentUpdates(callback) {
-    if (!this.socket) {
-      console.warn(
-        "Cannot subscribe to comment updates: Socket not initialized"
-      );
+    if (!this.client || !this.connected) {
+      console.warn("Cannot subscribe to comment updates: STOMP not connected");
       return;
     }
-this.socket.off("comment_update");
-    console.log(`Subscribing to comment updates for userId=${this.userId}`);
-    this.socket.on("comment_update", (data) => {
-      console.log("Raw comment update data:", data);
-      let comment;
+    this.client.subscribe(`/topic/notifications.${this.userId}`, (message) => {
       try {
-        const jsonData = Array.isArray(data) ? data[0] : data;
-        comment =
-          typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
-        console.log("Parsed comment:", comment);
-        if (typeof callback === "function") {
-          callback(comment);
+        const data = JSON.parse(message.body);
+        // Filter comment updates
+        if (data && (data.type === "COMMENT" || data.message?.includes("commented"))) {
+          console.log("Received comment update:", data);
+          if (typeof callback === "function") {
+            callback(data);
+          }
         }
       } catch (e) {
-        console.error("Error parsing comment update:", e, "Raw data:", data);
-        return;
+        console.error("Error processing comment update:", e);
       }
     });
-
-    if (!this.connected) {
-      console.warn("Socket not connected when subscribing to comment updates");
-    }
+    console.log(`Subscribed to comment updates for userId=${this.userId}`);
   }
 
   subscribeToFollow(callback) {
-    if (!this.socket) {
-      console.warn(
-        "Cannot subscribe to comment updates: Socket not initialized"
-      );
+    if (!this.client || !this.connected) {
+      console.warn("Cannot subscribe to follow updates: STOMP not connected");
       return;
     }
-this.socket.off("receiveFollowNotification");
-    // console.log(`Subscribing to comment updates for userId=${this.userId}`);
-    this.socket.on("receiveFollowNotification", (data) => {
-      console.log("Raw follow update data:", data);
-      let follow;
+    this.client.subscribe(`/topic/notifications.${this.userId}`, (message) => {
       try {
-        const jsonData = Array.isArray(data) ? data[0] : data;
-        follow = typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
-        console.log("Parsed follow:", follow);
-        if (typeof callback === "function") {
-          callback(follow);
+        const data = JSON.parse(message.body);
+        if (data && (data.type === "FOLLOW" || data.message?.includes("follow"))) {
+          console.log("Received follow update:", data);
+          if (typeof callback === "function") {
+            callback(data);
+          }
         }
       } catch (e) {
-        console.error("Error parsing follow update:", e, "Raw data:", data);
-        return;
+        console.error("Error processing follow update:", e);
       }
     });
-
-    if (!this.connected) {
-      console.warn("Socket not connected when subscribing to comment updates");
-    }
+    console.log(`Subscribed to follow updates for userId=${this.userId}`);
   }
 
   disconnect() {
@@ -232,20 +194,18 @@ this.socket.off("receiveFollowNotification");
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
-      console.log("Socket.IO disconnected");
+    if (this.client) {
+      this.client.deactivate();
+      this.client = null;
+      console.log("STOMP WebSocket disconnected");
     }
-
     this.connected = false;
   }
 
   isConnected() {
-    return this.connected && this.socket && this.socket.connected;
+    return this.connected && this.client && this.client.active;
   }
 }
 
-const notificationSocket = new NotificationSocket();
-export default notificationSocket;
+const notificationWebSocket = new NotificationWebSocket();
+export default notificationWebSocket;
