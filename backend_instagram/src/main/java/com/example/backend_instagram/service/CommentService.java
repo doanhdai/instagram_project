@@ -6,7 +6,6 @@ import com.example.backend_instagram.entity.Post;
 import com.example.backend_instagram.entity.User;
 import com.example.backend_instagram.repository.CommentRepository;
 import com.example.backend_instagram.repository.PostRepository;
-import com.corundumstudio.socketio.SocketIOServer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -25,19 +24,19 @@ public class CommentService {
     private final PostRepository postRepository;
     private final UserService userService;
     private final NotificationService notificationService;
-    private final SocketIOServer socketIOServer;
+    private final NotificationWebSocketService notificationWebSocketService;
     private final ObjectMapper objectMapper;
 
     public CommentService(CommentRepository commentRepository,
             PostRepository postRepository,
             UserService userService,
             NotificationService notificationService,
-            SocketIOServer socketIOServer) {
+            NotificationWebSocketService notificationWebSocketService) {
         this.commentRepository = commentRepository;
         this.postRepository = postRepository;
         this.userService = userService;
         this.notificationService = notificationService;
-        this.socketIOServer = socketIOServer;
+        this.notificationWebSocketService = notificationWebSocketService;
         this.objectMapper = new ObjectMapper();
         this.objectMapper.registerModule(new JavaTimeModule());
         this.objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -55,21 +54,19 @@ public class CommentService {
         commentRepository.save(comment);
         post.setCommentsCount(post.getCommentsCount() + 1);
         postRepository.save(post);
-        // Gửi thông báo bình luận
+        // Gửi thông báo bình luận qua STOMP
         notificationService.createCommentNotification(postId, userId, content);
 
         // Tính số lượng bình luận của bài viết
         Long commentsCount = commentRepository.countByPost(post);
 
-        // Phát sự kiện comment_update tới tất cả client
+        // Phát sự kiện comment_update qua STOMP
         try {
             CommentDTO commentDTO = toDTO(comment);
             commentDTO.setCommentsCount(commentsCount);
-            String json = objectMapper.writeValueAsString(commentDTO);
-            logger.debug("CommentDTO JSON: {}", json);
-            socketIOServer.getBroadcastOperations().sendEvent("comment_update", json);
-            logger.info("Broadcast comment update: postId={}, commentId={}, content={}, commentsCount={}",
-                    postId, commentDTO.getId(), content, commentsCount);
+            String message = "New comment on post " + postId + ": " + truncateComment(content, 30);
+            logger.info("Broadcast comment update via STOMP: postId={}, commentId={}, content={}",
+                    postId, comment.getId(), content);
         } catch (Exception e) {
             logger.error("Error broadcasting comment update: {}", e.getMessage(), e);
         }

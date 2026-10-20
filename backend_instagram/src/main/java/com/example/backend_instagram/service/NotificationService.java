@@ -1,13 +1,10 @@
 package com.example.backend_instagram.service;
 
-import com.corundumstudio.socketio.SocketIOClient;
-import com.corundumstudio.socketio.SocketIOServer;
 import com.example.backend_instagram.dto.notification.NotificationDTO;
 import com.example.backend_instagram.entity.Notification;
 import com.example.backend_instagram.entity.NotificationType;
 import com.example.backend_instagram.entity.Post;
 import com.example.backend_instagram.entity.User;
-import com.example.backend_instagram.handler.SocketIOHandler;
 import com.example.backend_instagram.repository.NotificationRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -16,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,22 +20,19 @@ public class NotificationService {
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);
 
     private final NotificationRepository notificationRepository;
-    private final SocketIOServer socketIOServer;
+    private final NotificationWebSocketService notificationWebSocketService;
     private final UserService userService;
     private final PostService postService;
-    private final SocketIOHandler socketIOHandler;
     private final ObjectMapper objectMapper;
 
     public NotificationService(NotificationRepository notificationRepository,
-            SocketIOServer socketIOServer,
+            NotificationWebSocketService notificationWebSocketService,
             UserService userService,
-            PostService postService,
-            SocketIOHandler socketIOHandler) {
+            PostService postService) {
         this.notificationRepository = notificationRepository;
-        this.socketIOServer = socketIOServer;
+        this.notificationWebSocketService = notificationWebSocketService;
         this.userService = userService;
         this.postService = postService;
-        this.socketIOHandler = socketIOHandler;
         this.objectMapper = new ObjectMapper();
         this.objectMapper.registerModule(new JavaTimeModule());
         this.objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -109,19 +102,11 @@ public class NotificationService {
       }
 
       private void sendLikeUpdateToUser(Long userId, LikeUpdateDTO likeUpdateDTO) {
-        SocketIOClient client = socketIOHandler.getUserSocketMap().get(userId.toString());
-        if (client != null && client.isChannelOpen()) {
-          try {
-            String json = objectMapper.writeValueAsString(likeUpdateDTO);
-            logger.debug("Serialized like update for user: {}, json: {}", userId, json);
-            client.sendEvent("like_update", json);
-            logger.info("Like update sent to user: {}, content: {}, json: {}",
-                userId, likeUpdateDTO.getMessage(), json);
-          } catch (Exception e) {
-            logger.error("Error sending like update via WebSocket: {}", e.getMessage(), e);
-          }
-        } else {
-          logger.warn("Client not found or not connected for userId: {}", userId);
+        try {
+          notificationWebSocketService.sendNotificationToUser(userId, likeUpdateDTO);
+          logger.info("Like update sent to user: {} via STOMP", userId);
+        } catch (Exception e) {
+          logger.error("Error sending like update via WebSocket: {}", e.getMessage(), e);
         }
       }
 
@@ -147,20 +132,12 @@ public class NotificationService {
     }
 
     private void sendNotificationToUser(Long userId, NotificationDTO notificationDTO) {
-        logger.debug("userSocketMap keys: {}", socketIOHandler.getUserSocketMap().keySet());
-        SocketIOClient client = socketIOHandler.getUserSocketMap().get(userId.toString());
-        if (client != null && client.isChannelOpen()) {
-            try {
-                String json = objectMapper.writeValueAsString(notificationDTO);
-                logger.debug("Serialized notification for user: {}, json: {}", userId, json);
-                client.sendEvent("notification", json);
-                logger.info("Notification sent to user: {}, content: {}, json: {}",
-                        userId, notificationDTO.getMessage(), json);
-            } catch (Exception e) {
-                logger.error("Error sending notification via WebSocket: {}", e.getMessage(), e);
-            }
-        } else {
-            logger.warn("Client not found or not connected for userId: {}", userId);
+        try {
+            notificationWebSocketService.sendNotificationToUser(userId, notificationDTO);
+            logger.info("Notification sent to user: {} via STOMP, content: {}",
+                userId, notificationDTO.getMessage());
+        } catch (Exception e) {
+            logger.error("Error sending notification via WebSocket: {}", e.getMessage(), e);
         }
     }    
     // private void broadcastLikeUpdate(Long postId, Integer likesCount, String message, String userNickname,

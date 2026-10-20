@@ -81,8 +81,9 @@ const NewsFeedCart = () => {
   }, [userInfo?.id, check]);
 
   useEffect(() => {
+    let unsubscribeLikes;
     if (userInfo?.id) {
-      notificationSocket.subscribeToLikeUpdates((data) => {
+      unsubscribeLikes = notificationSocket.subscribeToLikeUpdates((data) => {
         setPostData((prev) =>
           prev.map((post) =>
             post.id === data.postId
@@ -94,26 +95,29 @@ const NewsFeedCart = () => {
     }
 
     return () => {
-      console.log("Disconnecting notification");
-      notificationSocket.disconnect();
+      if (unsubscribeLikes) {
+        unsubscribeLikes();
+      }
     };
   }, [userInfo?.id, dispatch]);
 
   useEffect(() => {
-    notificationSocket.subscribeToCommentUpdates((comment) => {
-      console.log("Received comment:", comment);
-      if (comment.commentsCount != null) {
-        setPostData((prev) =>
-          prev.map((post) =>
-            post.id === comment.postId
-              ? { ...post, commentsCount: comment.commentsCount }
-              : post
-          )
-        );
+    const unsubscribeComments = notificationSocket.subscribeToCommentUpdates(
+      (comment) => {
+        console.log("Received comment:", comment);
+        if (comment.commentsCount != null) {
+          setPostData((prev) =>
+            prev.map((post) =>
+              post.id === comment.postId
+                ? { ...post, commentsCount: comment.commentsCount }
+                : post
+            )
+          );
+        }
       }
-    });
+    );
     return () => {
-      notificationSocket.disconnect();
+      unsubscribeComments();
     };
   }, [userInfo?.id, dispatch]);
 

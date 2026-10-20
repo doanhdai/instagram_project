@@ -9,6 +9,8 @@ import com.example.backend_instagram.utils.SecurityUntil;
 import com.example.backend_instagram.utils.constant.ApiMessage;
 import com.example.backend_instagram.utils.error.IdInvalidException;
 import jakarta.validation.Valid;
+import java.time.Duration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +34,12 @@ public class AuthController {
   private final SecurityUntil securityUntil;
   private final UserService userService;
   private final PasswordEncoder passwordEncoder;
+  @Value("${app.auth-cookie-secure:false}")
+  private boolean authCookieSecure;
+  @Value("${app.auth-cookie-same-site:Lax}")
+  private String authCookieSameSite;
+  @Value("${tenit.jwt.refresh-token-validity-in-seconds:1000000000}")
+  private long refreshCookieMaxAge;
 
   public AuthController(
     AuthenticationManagerBuilder authenticationManagerBuilder,
@@ -106,10 +114,10 @@ public class AuthController {
     ResponseCookie responseCookie = ResponseCookie
       .from("refresh_token", refresh_token)
       .httpOnly(true)
-      .secure(true)
-      .sameSite("None")
+      .secure(authCookieSecure)
+      .sameSite(authCookieSameSite)
       .path("/")
-      .maxAge(60)
+      .maxAge(Duration.ofSeconds(refreshCookieMaxAge))
       .build();
     return ResponseEntity
       .ok()
@@ -183,11 +191,12 @@ public class AuthController {
     //set cooke
 
     ResponseCookie responseCookie = ResponseCookie
-      .from("refresh_token", refresh_token)
+      .from("refresh_token", new_refresh_token)
       .httpOnly(true)
-      .secure(true)
+      .secure(authCookieSecure)
+      .sameSite(authCookieSameSite)
       .path("/")
-      .maxAge(60)
+      .maxAge(Duration.ofSeconds(refreshCookieMaxAge))
       .build();
     return ResponseEntity
       .ok()
@@ -213,7 +222,8 @@ public class AuthController {
     ResponseCookie deleteSpringCookie = ResponseCookie
       .from("refresh_token", "")
       .httpOnly(true)
-      .secure(true)
+      .secure(authCookieSecure)
+      .sameSite(authCookieSameSite)
       .path("/")
       .maxAge(0)
       .build();

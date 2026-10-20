@@ -3,12 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import * as yup from "yup";
-import { signInWithPopup, FacebookAuthProvider } from "firebase/auth";
-import { auth } from "../firebase/config";
 import { toast, ToastContainer } from "react-toastify";
 import { userRegister } from "../../Service/AuthApi";
-
-const provider = new FacebookAuthProvider();
 
 const userSchema = yup.object().shape({
   email: yup
@@ -67,16 +63,6 @@ const Register = () => {
     }
   };
 
-  const handleLoginFb = async () => {
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      console.log("Đăng nhập thành công với Facebook!", user);
-    } catch (error) {
-      console.error("Lỗi khi đăng nhập:", error.message);
-    }
-  };
-
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
       <div className="bg-white p-8 rounded-lg shadow-lg w-96 text-center">
@@ -84,13 +70,6 @@ const Register = () => {
         <p className="text-gray-600 text-sm mb-4">
           Đăng ký để xem ảnh và video từ bạn bè.
         </p>
-
-        <button
-          className="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition"
-          onClick={handleLoginFb}
-        >
-          Đăng nhập bằng Facebook
-        </button>
 
         <div className="relative flex items-center my-4">
           <hr className="w-full border-gray-300" />

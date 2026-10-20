@@ -50,6 +50,15 @@ public class User {
     createdAt = LocalDateTime.now();
   }
 
+  // Bidirectional relationships for performance optimization
+  @jakarta.persistence.OneToMany(mappedBy = "user", fetch = jakarta.persistence.FetchType.LAZY)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.List<com.example.backend_instagram.entity.Post> posts;
+
+  @jakarta.persistence.OneToMany(mappedBy = "user", fetch = jakarta.persistence.FetchType.LAZY)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.List<com.example.backend_instagram.entity.Comment> comments;
+
   public void setIsOnline(boolean isOnline) {
     this.isOnline = isOnline;
   }

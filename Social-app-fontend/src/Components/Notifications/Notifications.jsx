@@ -39,23 +39,25 @@ const Notification = () => {
 
     // notificationSocket.init(dispatch, userInfo.id);
 
-    notificationSocket.subscribeToCommentUpdates((data) => {
-      console.log("Received comment update:", data);
+    const unsubscribeComments = notificationSocket.subscribeToCommentUpdates(
+      (data) => {
+        console.log("Received comment update:", data);
 
-      const enriched = {
-        ...data,
-        sentAt: data.sentAt || new Date().toISOString(),
-      };
+        const enriched = {
+          ...data,
+          sentAt: data.sentAt || new Date().toISOString(),
+        };
 
-      setNotifications((prev) => {
-        if (prev.some((n) => n.id === enriched.id)) {
-          return prev;
-        }
-        return [enriched, ...prev];
-      });
-    });
+        setNotifications((prev) => {
+          if (prev.some((n) => n.id === enriched.id)) {
+            return prev;
+          }
+          return [enriched, ...prev];
+        });
+      }
+    );
 
-    notificationSocket.subscribeToLikeUpdates((notification) => {
+    const unsubscribeLikes = notificationSocket.subscribeToLikeUpdates((notification) => {
       console.log("Received like update:", notification);
 
       // Gán thời gian hiện tại nếu không có sentAt
@@ -80,7 +82,7 @@ const Notification = () => {
       });
     });
 
-    notificationSocket.subscribeToFollow((data) => {
+    const unsubscribeFollow = notificationSocket.subscribeToFollow((data) => {
       console.log("Received follow update:", data);
 
       const enriched = {
@@ -103,7 +105,9 @@ const Notification = () => {
     });
 
     return () => {
-      notificationSocket.disconnect();
+      unsubscribeComments();
+      unsubscribeLikes();
+      unsubscribeFollow();
     };
   }, [userInfo?.id, dispatch]);
 

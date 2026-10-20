@@ -1,12 +1,13 @@
 package com.example.backend_instagram.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
-import org.apache.http.util.EntityUtils;
+import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.core5.http.ClassicHttpResponse;
+import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -39,14 +40,14 @@ public class GeminiChatService {
         );
         
         String json = mapper.writeValueAsString(payload);
-        StringEntity entity = new StringEntity(json, "UTF-8");
+        StringEntity entity = new StringEntity(json, java.nio.charset.StandardCharsets.UTF_8);
         httpPost.setEntity(entity);
         httpPost.setHeader("Content-Type", "application/json; charset=UTF-8");
 
         // Gửi yêu cầu và nhận phản hồi
-        try (CloseableHttpResponse response = client.execute(httpPost)) {
-            int statusCode = response.getStatusLine().getStatusCode();
-            String responseBody = EntityUtils.toString(response.getEntity(), "UTF-8");
+        return client.execute(httpPost, response -> {
+            int statusCode = response.getCode();
+            String responseBody = EntityUtils.toString(response.getEntity(), java.nio.charset.StandardCharsets.UTF_8);
 
             // Log để debug
             System.out.println("Prompt: " + prompt);
@@ -70,8 +71,6 @@ public class GeminiChatService {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to parse JSON response: " + responseBody, e);
             }
-        } finally {
-            client.close();
-        }
+        });
     }
 }

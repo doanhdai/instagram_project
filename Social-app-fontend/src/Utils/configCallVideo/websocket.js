@@ -1,13 +1,17 @@
-import { use, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
-import { io } from "socket.io-client";
 import Peer from "simple-peer";
-// Tạo một instance socket duy nhất
-let socketInstance = null;
+import webSocketService from "../../Service/WebSocketService";
 
+/**
+ * Hook video call dùng chung STOMP client với Messenger/Notification.
+ * Trước đây hook này tự mở thêm 1 SockJS connection và subscribe topic công
+ * khai; giờ chỉ đăng ký listener trên user queue.
+ */
 export function useWebSocket() {
   const currentUser = useSelector((state) => state.login?.userInfo);
-  const socketRef = useRef();
+  const accessToken = useSelector((state) => state.login?.accessToken);
+
   const [me, setMe] = useState("");
   const [caller, setCaller] = useState("");
   const [name, setName] = useState("");
@@ -19,208 +23,241 @@ export function useWebSocket() {
   const [callAccepted, setCallAccepted] = useState(false);
   const [followNotifications, setFollowNotifications] = useState(null);
   const [peer, setPeer] = useState(null);
+  const [selectedCameraId, setSelectedCameraId] = useState(null);
+  const [availableCameras, setAvailableCameras] = useState([]);
+
+  const streamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const peerRef = useRef(null);
+  const remoteUserIdRef = useRef(null);
+
+  const stopStream = useCallback((mediaStream) => {
+    if (!mediaStream) {
+      return;
+    }
+    mediaStream.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const cleanupMedia = useCallback(() => {
+    stopStream(streamRef.current);
+    streamRef.current = null;
+    setStream(null);
+
+    stopStream(remoteStreamRef.current);
+    remoteStreamRef.current = null;
+    setRemoteStream(null);
+
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+      setPeer(null);
+    }
+
+    setIsVideoCallActive(false);
+    setCallAccepted(false);
+    setReceivingCall(false);
+    setCaller("");
+    setCallerSignal(null);
+    remoteUserIdRef.current = null;
+  }, [stopStream]);
 
   useEffect(() => {
-    // Chỉ tạo socket mới nếu chưa có
-    if (!socketInstance) {
-      const socketUrl =
-        process.env.REACT_APP_SOCKET_URL || "http://localhost:9092";
-      socketInstance = io(socketUrl, {
-        transports: ["websocket"],
-        withCredentials: true,
-        query: { userId: currentUser?.id },
-      });
-
-      console.log(
-        "Creating new WebSocket connection with userId:",
-        currentUser?.id
-      );
+    if (!currentUser?.id) {
+      return undefined;
     }
 
-    socketRef.current = socketInstance;
-
-    socketRef.current.on("connect", () => {
-      console.log("Socket connected successfully");
-    });
-
-    socketRef.current.on("disconnect", () => {
-      console.log("Socket disconnected");
-    });
-
-    socketRef.current.on("me", (id) => {
-      if (id) {
-        localStorage.setItem("userId", id);
-        setMe(id);
+    let active = true;
+    webSocketService.init(undefined, currentUser.id, accessToken);
+    webSocketService.connect().catch((error) => {
+      if (active) {
+        console.error("Cannot connect WebSocket for video call:", error);
       }
     });
 
-    socketRef.current.on("callUser", async (data) => {
-      console.log("📞 Nhận cuộc gọi từ:", data);
-      setReceivingCall(true);
-      setCaller(data.from);
-      setName(data.name);
-      setCallerSignal(data.signal);
-    });
-
-    socketRef.current.on("callAccepted", (signal) => {
-      console.log("✅ Cuộc gọi được chấp nhận, signal:", signal);
-      setCallAccepted(true);
-      setIsVideoCallActive(true);
-      if (peer) {
-        peer.signal(signal);
+    const unsubscribeVideo = webSocketService.on("video-call", (signal) => {
+      if (!active || !signal) {
+        return;
+      }
+      if (signal.action === "endCall") {
+        cleanupMedia();
+        return;
+      }
+      if (signal.signal?.type === "offer") {
+        remoteUserIdRef.current = signal.from;
+        setReceivingCall(true);
+        setCaller(signal.from);
+        setName(signal.name || "");
+        setCallerSignal(signal.signal);
+      } else if (signal.signal?.type === "answer") {
+        setCallerSignal(signal.signal);
+        if (peerRef.current) {
+          try {
+            peerRef.current.signal(signal.signal);
+          } catch (error) {
+            console.warn("Cannot apply video answer:", error);
+          }
+        }
       }
     });
 
-    socketRef.current.on("callEnded", () => {
-      console.log("❌ Cuộc gọi kết thúc");
-      leaveCall();
-    });
+    const unsubscribeNotification = webSocketService.on(
+      "notification",
+      (notification) => setFollowNotifications(notification)
+    );
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (peer) {
-        peer.destroy();
-      }
+      active = false;
+      unsubscribeVideo();
+      unsubscribeNotification();
     };
-  }, [currentUser]);
+  }, [currentUser?.id, accessToken, cleanupMedia]);
 
-  const setupMediaStream = async () => {
-    try {
-      console.log("Setting up media stream...");
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+  const setupMediaStream = useCallback(async () => {
+    const mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
+    streamRef.current = mediaStream;
+    setStream(mediaStream);
+    return mediaStream;
+  }, []);
 
-      console.log("Media stream obtained:", mediaStream.id);
-      setStream(mediaStream);
-      return mediaStream;
-    } catch (error) {
-      console.error("Error setting up media stream:", error);
-      throw error;
-    }
-  };
-
-  const callUser = async (userToCall) => {
-    try {
-      console.log("Initiating call to:", userToCall);
-      const mediaStream = await setupMediaStream();
-
-      const newPeer = new Peer({
-        initiator: true,
-        trickle: false,
-        stream: mediaStream,
-      });
-
-      newPeer.on("signal", (data) => {
-        socketRef.current.emit("callUser", {
-          userToCall,
-          signalData: data,
-          from: currentUser.id,
-          name: currentUser.userFullname,
+  const callUser = useCallback(
+    async (userToCall) => {
+      if (!currentUser?.id || !userToCall) {
+        return;
+      }
+      try {
+        const mediaStream = await setupMediaStream();
+        remoteUserIdRef.current = userToCall;
+        const newPeer = new Peer({
+          initiator: true,
+          trickle: false,
+          stream: mediaStream,
         });
-      });
+        peerRef.current = newPeer;
+        setPeer(newPeer);
 
-      newPeer.on("stream", (remoteMediaStream) => {
-        console.log("Received remote stream in caller");
-        setRemoteStream(remoteMediaStream);
-      });
+        newPeer.on("signal", (data) => {
+          webSocketService
+            .sendVideoSignal(userToCall, {
+              from: currentUser.id,
+              name: currentUser.userFullname,
+              signal: data,
+            })
+            .catch((error) =>
+              console.error("Cannot send video offer:", error)
+            );
+        });
 
-      socketRef.current.on("callAccepted", (signal) => {
-        setCallAccepted(true);
+        newPeer.on("stream", (remoteMediaStream) => {
+          remoteStreamRef.current = remoteMediaStream;
+          setRemoteStream(remoteMediaStream);
+        });
+
         setIsVideoCallActive(true);
-        newPeer.signal(signal);
-      });
+      } catch (error) {
+        console.error("Error in callUser:", error);
+        cleanupMedia();
+      }
+    },
+    [currentUser?.id, currentUser?.userFullname, setupMediaStream, cleanupMedia]
+  );
 
-      setPeer(newPeer);
-    } catch (error) {
-      console.error("Error in callUser:", error);
+  const answerCall = useCallback(async () => {
+    if (!currentUser?.id || !caller) {
+      return;
     }
-  };
-
-  const answerCall = async () => {
     try {
-      console.log("Answering call from:", caller);
       const mediaStream = await setupMediaStream();
-
+      remoteUserIdRef.current = caller;
       const newPeer = new Peer({
         initiator: false,
         trickle: false,
         stream: mediaStream,
       });
+      peerRef.current = newPeer;
+      setPeer(newPeer);
 
       newPeer.on("signal", (data) => {
-        socketRef.current.emit("answerCall", { signal: data, to: caller });
+        webSocketService
+          .sendVideoSignal(caller, {
+            from: currentUser.id,
+            name: currentUser.userFullname,
+            signal: data,
+          })
+          .catch((error) =>
+            console.error("Cannot send video answer:", error)
+          );
       });
 
       newPeer.on("stream", (remoteMediaStream) => {
-        console.log("Received remote stream in answerer");
+        remoteStreamRef.current = remoteMediaStream;
         setRemoteStream(remoteMediaStream);
       });
 
-      newPeer.signal(callerSignal);
+      if (callerSignal) {
+        newPeer.signal(callerSignal);
+      }
+
       setCallAccepted(true);
       setIsVideoCallActive(true);
-      setPeer(newPeer);
+      setReceivingCall(false);
     } catch (error) {
       console.error("Error in answerCall:", error);
+      cleanupMedia();
     }
-  };
+  }, [
+    currentUser?.id,
+    currentUser?.userFullname,
+    caller,
+    callerSignal,
+    setupMediaStream,
+    cleanupMedia,
+  ]);
 
-  const leaveCall = () => {
+  const leaveCall = useCallback(() => {
+    const remoteUserId = remoteUserIdRef.current || caller;
+    if (remoteUserId) {
+      webSocketService
+        .sendVideoSignal(remoteUserId, { action: "endCall" })
+        .catch((error) => console.warn("Cannot send endCall:", error));
+    }
+    cleanupMedia();
+  }, [caller, cleanupMedia]);
+
+  const sendFollowNotification = useCallback(
+    ({ toUserId }) => {
+      if (!currentUser?.id || !toUserId) {
+        return;
+      }
+      const displayName =
+        currentUser.userFullname || currentUser.name || "Unknown";
+      webSocketService
+        .sendNotification(toUserId, {
+          fromUserId: String(currentUser.id),
+          fromUserName: displayName,
+          toUserId: String(toUserId),
+          message: `${displayName} vừa theo dõi bạn.`,
+          sentAt: new Date().toISOString(),
+        })
+        .catch((error) =>
+          console.warn("Cannot send follow notification:", error)
+        );
+    },
+    [currentUser?.id, currentUser?.userFullname, currentUser?.name]
+  );
+
+  const listCameras = useCallback(async () => {
     try {
-      // Gửi sự kiện kết thúc cuộc gọi trước khi dọn dẹp
-      if (socketRef.current) {
-        socketRef.current.emit("endCall", { to: caller });
-      }
-
-      // Dọn dẹp stream và peer
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-          stream.removeTrack(track);
-        });
-        setStream(null);
-      }
-
-      if (remoteStream) {
-        remoteStream.getTracks().forEach((track) => {
-          track.stop();
-          remoteStream.removeTrack(track);
-        });
-        setRemoteStream(null);
-      }
-
-      if (peer) {
-        peer.destroy();
-        setPeer(null);
-      }
-
-      // Reset các state
-      setIsVideoCallActive(false);
-      setCallAccepted(false);
-      setReceivingCall(false);
-      setCaller("");
-      setCallerSignal(null);
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAvailableCameras(
+        devices.filter((device) => device.kind === "videoinput")
+      );
     } catch (error) {
-      console.error("Error in leaveCall:", error);
+      console.warn("Cannot enumerate cameras:", error);
     }
-
-    // Gửi thông báo follow
-  };
-  const sendFollowNotification = ({ toUserId }) => {
-    const payload = {
-      fromUserId: String(currentUser.id),
-      fromUserName: currentUser.name,
-      toUserId,
-      message: `${currentUser.name} vừa theo dõi bạn.`,
-      sentAt: new Date().toISOString(), // Thời gian ISO để backend dễ xử lý
-    };
-
-    socketRef.current.emit("followNotification", payload);
-  };
+  }, []);
 
   return {
     me,
@@ -232,11 +269,16 @@ export function useWebSocket() {
     isVideoCallActive,
     stream,
     remoteStream,
-    socketRef,
     callUser,
     answerCall,
     leaveCall,
     sendFollowNotification,
     followNotifications,
+    selectedCameraId,
+    setSelectedCameraId,
+    availableCameras,
+    listCameras,
+    peer,
+    setMe,
   };
 }
