@@ -1,6 +1,7 @@
 package com.example.backend_instagram.service;
 
 import com.example.backend_instagram.dto.post.CreatePostRequest;
+import com.example.backend_instagram.dto.post.PostResponseDTO;
 import com.example.backend_instagram.entity.Follow;
 import com.example.backend_instagram.entity.Media;
 import com.example.backend_instagram.entity.Post;
@@ -10,6 +11,10 @@ import com.example.backend_instagram.repository.MediaRepository;
 import com.example.backend_instagram.repository.PostRepository;
 import com.example.backend_instagram.repository.UserRepository;
 import com.example.backend_instagram.utils.AwsS3Service;
+import com.example.backend_instagram.utils.constant.CacheNames;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,6 +45,10 @@ public class PostService {
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true),
+            @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
+    })
     public Post createPost(Long userId, CreatePostRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
@@ -79,14 +88,21 @@ public class PostService {
         return postRepository.save(post);
     }
 
-    public List<Post> getAllPostsByUserId(Long userId) {
-        return postRepository.findByUserIdAndStatus(userId, "True");
+    @Cacheable(cacheNames = CacheNames.POSTS, key = "'user:' + #userId")
+    public List<PostResponseDTO> getAllPostsByUserId(Long userId) {
+        return postRepository.findByUserIdAndStatus(userId, "True").stream()
+                .map(PostResponseDTO::from)
+                .toList();
     }
 
-    public List<Post> getAllPosts() {
-        return postRepository.findByStatus("True");
+    @Cacheable(cacheNames = CacheNames.POSTS, key = "'all'")
+    public List<PostResponseDTO> getAllPosts() {
+        return postRepository.findByStatus("True").stream()
+                .map(PostResponseDTO::from)
+                .toList();
     }
 
+    @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true)
     public Post savePost(Post post) {
         return postRepository.save(post);
     }
@@ -96,6 +112,7 @@ public class PostService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true)
     public Post updatePost(Long postId, CreatePostRequest request) {
         Post post = postRepository.findById(postId)
                 .orElseThrow(() -> new RuntimeException("Post not found"));
@@ -136,6 +153,10 @@ public class PostService {
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true),
+            @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
+    })
     public void deletePost(Long postId) {
         Post post = postRepository.findById(postId)
                 .orElseThrow(() -> new RuntimeException("Post not found"));
@@ -149,6 +170,7 @@ public class PostService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheNames.POSTS, allEntries = true)
     public Post updatePostStatus(Long postId, String status) {
         Post post = postRepository.findById(postId)
                 .orElseThrow(() -> new RuntimeException("Post not found"));
@@ -172,12 +194,15 @@ public class PostService {
         return postRepository.save(post);
     }
 
-    public List<Post> getPostsFromFollowing(Long userId) {
+    @Cacheable(cacheNames = CacheNames.POSTS, key = "'following:' + #userId")
+    public List<PostResponseDTO> getPostsFromFollowing(Long userId) {
         // Lấy danh sách người dùng mà userId đang theo dõi
         List<Follow> following = followRepository.findByFollowerId(userId);
         List<Long> followingIds = following.stream()
                 .map(follow -> follow.getFollowing().getId())
                 .collect(Collectors.toList());
-        return postRepository.findByUserIdInAndStatusAndAccess(followingIds, "True", "PUBLIC");
+        return postRepository.findByUserIdInAndStatusAndAccess(followingIds, "True", "PUBLIC").stream()
+                .map(PostResponseDTO::from)
+                .toList();
     }
 }

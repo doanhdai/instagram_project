@@ -33,6 +33,19 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   backend:
     build:
       context: ./backend_instagram
@@ -55,10 +68,17 @@ services:
       S3_ENDPOINT: http://localstack:4566
       S3_PUBLIC_ENDPOINT: http://localhost:4566
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_TTL_POSTS: ${CACHE_TTL_POSTS:-60}
+      CACHE_TTL_COMMENTS: ${CACHE_TTL_COMMENTS:-60}
+      CACHE_TTL_USER_STATS: ${CACHE_TTL_USER_STATS:-120}
     ports:
       - "8081:8081"
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       localstack:
         condition: service_healthy
@@ -104,3 +124,4 @@ services:
 volumes:
   mysql_data:
   localstack_data:
+  redis_data:

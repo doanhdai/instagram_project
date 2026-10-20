@@ -5,7 +5,9 @@ import com.example.backend_instagram.entity.*;
 import com.example.backend_instagram.repository.FollowRepository;
 import com.example.backend_instagram.repository.NotificationRepository;
 import com.example.backend_instagram.repository.UserRepository;
+import com.example.backend_instagram.utils.constant.CacheNames;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.security.core.parameters.P;
 import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
@@ -36,6 +38,7 @@ public class FollowService {
     }
 
 
+    @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
     public FollowResponseDTO createFollow(User currUser, User followedUser) {
         Follow follow = new Follow();
         follow.setId(new FollowId(currUser.getId(), followedUser.getId()));
@@ -84,6 +87,7 @@ public class FollowService {
     }
 
 
+    @CacheEvict(cacheNames = CacheNames.USER_STATS, allEntries = true)
     public void unfollow(User currUser, User followedUser) {
         // Tìm bản ghi follow từ currUser đến followedUser
         Follow follow = followRepository.findByFollowerAndFollowing(currUser, followedUser)
