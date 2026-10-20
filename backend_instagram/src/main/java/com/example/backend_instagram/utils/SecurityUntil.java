@@ -6,7 +6,6 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -62,7 +61,6 @@ public class SecurityUntil {
       .expiresAt(validity)
       .subject(email)
       .claim("user", restLogin)
-      .claim("userId", restLogin != null ? restLogin.getId() : null)
       .claim("permission", listAuthority)
       .build();
 
@@ -84,7 +82,6 @@ public class SecurityUntil {
       .expiresAt(validity)
       .subject(email)
       .claim("user", restLogin.getUser())
-      .claim("userId", restLogin.getUser() != null ? restLogin.getUser().getId() : null)
       .build();
     return this.jwtEncoder.encode(
         JwtEncoderParameters.from(JwsHeader.with(() -> "HS512").build(), claims)
@@ -112,44 +109,6 @@ public class SecurityUntil {
       return jwt.getSubject();
     } else if (authentication.getPrincipal() instanceof String s) {
       return s;
-    }
-    return null;
-  }
-
-  /**
-   * Lấy userId từ JWT claim. Dùng cho cả REST và STOMP để không tin userId
-   * do client gửi lên.
-   */
-  public static Optional<Long> getCurrentUserId() {
-    Authentication authentication = SecurityContextHolder
-      .getContext()
-      .getAuthentication();
-    if (authentication == null) {
-      return Optional.empty();
-    }
-    if (authentication.getPrincipal() instanceof org.springframework.security.oauth2.jwt.Jwt jwt) {
-      Long userId = toLong(jwt.getClaim("userId"));
-      if (userId != null) {
-        return Optional.of(userId);
-      }
-      Map<String, Object> userClaim = jwt.getClaimAsMap("user");
-      if (userClaim != null) {
-        return Optional.ofNullable(toLong(userClaim.get("id")));
-      }
-    }
-    return Optional.empty();
-  }
-
-  private static Long toLong(Object value) {
-    if (value instanceof Number number) {
-      return number.longValue();
-    }
-    if (value instanceof String text && !text.isBlank()) {
-      try {
-        return Long.valueOf(text);
-      } catch (NumberFormatException ignored) {
-        return null;
-      }
     }
     return null;
   }

@@ -54,10 +54,10 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     // @Query("UPDATE Message m SET m.isRead = true WHERE m.sender.id = :senderId AND m.receiver.id = :receiverId AND m.isRead = false")
     // void markMessagesAsRead(@Param("senderId") Long senderId, @Param("receiverId") Long receiverId);
 
-    @Query("SELECT m FROM Message m JOIN FETCH m.sender WHERE m.conversation.id = :conversationId ORDER BY m.createdAt ASC")
+    @Query("SELECT m FROM Message m WHERE m.conversation.id = :conversationId ORDER BY m.createdAt ASC")
     List<Message> findByConversationId(@Param("conversationId") Long conversationId);
 
-    @Query("SELECT m FROM Message m JOIN FETCH m.sender WHERE m.conversation.id = :conversationId ORDER BY m.createdAt DESC")
+    @Query("SELECT m FROM Message m WHERE m.conversation.id = :conversationId ORDER BY m.createdAt DESC")
     List<Message> findByConversationIdWithPagination(@Param("conversationId") Long conversationId, Pageable pageable);
 
     @Query("SELECT COUNT(m) FROM Message m WHERE m.conversation.id = :conversationId AND m.sender.id != :userId AND m.isRead = false")

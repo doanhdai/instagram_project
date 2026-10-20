@@ -3,7 +3,7 @@ import store from "../../Redux/store";
 import { userLogoutALL } from "../../Redux/Reducer/UserAppDeucer";
 
 const instance = axios.create({
-  baseURL: `${(process.env.REACT_APP_API_URL || "http://localhost:8081").replace(/\/+$/, "")}/api/v1`,
+  baseURL: "http://localhost:8081/api/v1",
   withCredentials: true, // Cho phép gửi cookie với request
 });
 
@@ -25,10 +25,10 @@ instance.interceptors.response.use(
   (response) => response.data,
   async (error) => {
     const originalRequest = error.config;
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+    if (error.response.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
-        await axios.get(`${instance.defaults.baseURL}/auth/refresh`, {
+        await axios.get("http://localhost:8081/api/v1/auth/refresh", {
           withCredentials: true,
         });
         return instance(originalRequest);

@@ -1,6 +1,7 @@
 package com.example.backend_instagram.dto.follow;
 
 import com.example.backend_instagram.entity.Follow;
+import com.example.backend_instagram.entity.Notification;
 import lombok.Getter;
 import lombok.Setter;
 

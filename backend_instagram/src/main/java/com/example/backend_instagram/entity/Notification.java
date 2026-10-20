@@ -7,9 +7,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "notifications", indexes = {
-        @Index(name = "idx_notifications_user_read_sent", columnList = "user_id, is_read, sent_at")
-})
+@Table(name = "notifications")
 @Getter
 @Setter
 public class Notification {
