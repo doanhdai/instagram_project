@@ -37,6 +37,8 @@ Quy tắc làm việc cho AI agent (và người) trong repo `haole2k4/instagram
 ## Repo gốc (upstream)
 
 - Không đụng tới `doanhdai/instagram_project`: không fetch, merge, rebase từ đó, không push hay tạo PR sang đó. Chỉ làm việc với `haole2k4/instagram_project`.
+- Mọi thao tác push (nhánh và tag) chỉ dùng remote `origin` (`git@github.com:haole2k4/instagram_project.git`). Không bao giờ push bằng `upstream`.
+- Remote `upstream` đã bị vô hiệu hoá push (`git remote set-url --push upstream no_push`); không khôi phục URL push của nó. Nếu vô tình push sang `doanhdai`, báo lại ngay để xử lý.
 
 ## Bảo mật và cấu hình
 
