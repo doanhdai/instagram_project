@@ -24,6 +24,8 @@ docker compose ps
 
 Mở frontend tại [http://localhost:3000](http://localhost:3000). Backend API chạy tại `http://localhost:8081`; health endpoint là `http://localhost:8081/actuator/health`.
 
+Khi chạy frontend riêng bằng `pnpm start` (không qua Docker), sao chép `Social-app-fontend/.env.example` thành `Social-app-fontend/.env`. File `.env` không được commit.
+
 Seed tạo ba tài khoản demo dùng chung mật khẩu `InstagramDemo!2026`:
 
 | Email | Tên hiển thị |
