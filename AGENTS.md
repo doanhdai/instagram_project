@@ -26,6 +26,13 @@ Quy tắc làm việc cho AI agent (và người) trong repo `haole2k4/instagram
 5. Không `push --force` lên `master`.
 6. Mỗi PR tập trung vào một mục đích, mô tả rõ thay đổi gì và cách kiểm tra.
 7. Chỉ merge PR (trên repo này) khi build/test liên quan đã pass; nếu chưa chạy được test hoặc test fail thì để PR mở và báo lại.
+8. **Bắt buộc xoá nhánh sau khi merge PR.** Ngay sau khi PR được merge, xoá cả nhánh remote lẫn nhánh local:
+   ```bash
+   gh pr merge <số-PR> --repo haole2k4/instagram_project --merge --delete-branch
+   git branch -d <nhánh>   # hoặc `-D` nếu nhánh chưa được merge fast-forward
+   git fetch --prune
+   ```
+   Không để lại nhánh đã merge (remote hoặc local). Nếu merge qua giao diện GitHub, nhớ xoá nhánh ở cả hai nơi sau đó.
 
 ## Repo gốc (upstream)
 
@@ -50,4 +57,3 @@ Quy tắc làm việc cho AI agent (và người) trong repo `haole2k4/instagram
 - Đọc code liên quan trước khi sửa; theo convention hiện có (package `controller`/`service`/`repository`/`entity`/`dto` ở backend, cấu trúc `Pages`/`Components` ở frontend).
 - Sửa tối thiểu, đúng phạm vi yêu cầu; không refactor hoặc format lại file không liên quan.
 - Commit message và mô tả PR ngắn gọn, rõ ý; không ràng buộc định dạng hay ngôn ngữ.
-- Khi có sub-agent, dùng model Haiku.
